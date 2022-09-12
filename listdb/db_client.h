@@ -135,7 +135,8 @@ void DBClient::Put(const Key& key, const Value& value) {
   MemNode* node = (MemNode*) malloc(sizeof(MemNode) + (dram_height - 1) * sizeof(uint64_t));
   node->key = key;
   node->tag = (l0_id << 32) | dram_height;
-  node->value = log_paddr.dump();
+  // node->value = log_paddr.dump();
+  node->value = value;
   memset((void*) &node->next[0], 0, dram_height * sizeof(uint64_t));
 
   auto skiplist = mem->skiplist();
@@ -153,8 +154,8 @@ void DBClient::Put(const Key& key, const Value& value) {
   MemNode* node = (MemNode*) malloc(sizeof(MemNode) + (height - 1) * sizeof(uint64_t));
   node->key = key;
   node->tag = height;
-  //node->value = value;
-  node->value = 0;
+  node->value = value;
+  // node->value = 0;
   memset(&node->next[0], 0, height * sizeof(uint64_t));
 
   auto mem = db_->GetWritableMemTable(kv_size, s);
@@ -333,8 +334,8 @@ void DBClient::PutStringKV(const std::string_view& key_sv, const std::string_vie
   MemNode* node = (MemNode*) malloc(mem_node_size);
   node->key = key;
   node->tag = (l0_id << 32) | dram_height;
-  //node->value = value;
-  node->value = log_paddr.dump();
+  node->value = value;
+  // node->value = log_paddr.dump();
   memset((void*) &node->next[0], 0, dram_height * sizeof(uint64_t));
 
   auto skiplist = mem->skiplist();
