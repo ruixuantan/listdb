@@ -30,7 +30,7 @@ class LinearProbingHashTableCache {
   uint32_t Hash1(const Key& key);
 
  private:
-  const static int probing_distance_ = LISTDB_L0_CACHE_PROBING_DISTANCE;
+  const static int probing_distance_ = 1;
 
   const size_t size_;
   const int shard_;
