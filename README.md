@@ -16,3 +16,8 @@ ListDB: Union of Write-Ahead Logs and Persistent SkipLists for Incremental Check
 
 Paper link: https://www.usenix.org/conference/osdi22/presentation/kim
 
+## Libraries to install
+* sudo apt install libpmemobj-cpp-dev
+* sudo apt install libjemalloc-dev
+* sudo apt install libtbb-dev
+* sudo apt install libgflags-dev
