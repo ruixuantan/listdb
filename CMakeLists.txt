@@ -141,12 +141,12 @@ endforeach()
 # ubench
 #file(GLOB_RECURSE ubench_srcs ${LISTDB_SRC_DIR}/ubench/*.cc)
 set(ubench_srcs
-  listdb/ubench/eee.cc
-  listdb/ubench/rw_ratio.cc
-  listdb/ubench/tune_l1.cc
-  listdb/ubench/recovery_test.cc
-  listdb/ubench/string_kv_test.cc
-  listdb/ubench/ycsb_index_microbench.cc
+  # listdb/ubench/eee.cc
+  # listdb/ubench/rw_ratio.cc
+  # listdb/ubench/tune_l1.cc
+  # listdb/ubench/recovery_test.cc
+  # listdb/ubench/string_kv_test.cc
+  # listdb/ubench/ycsb_index_microbench.cc
   )
 foreach (ubench_src ${ubench_srcs})
   get_filename_component(ubench_name ${ubench_src} NAME_WE)
