@@ -2,8 +2,8 @@
 #define LISTDB_COMMON_H_
 
 #include <sched.h>
-#include <unistd.h>
 #include <sys/syscall.h>
+#include <unistd.h>
 
 #include <atomic>
 #include <cassert>
@@ -37,15 +37,17 @@ constexpr size_t kStringKeyLength = 16;
 
 constexpr int kNumRegions = 4;
 constexpr int kNumShards = 256;
+constexpr std::string_view kPathPrefix = "/optane/ruixuan/ldb";
 #ifdef LISTDB_RANGE_SHARD
-constexpr uint64_t kShardSize = std::numeric_limits<uint64_t>::max() / kNumShards + (kNumShards > 1);
+constexpr uint64_t kShardSize =
+    std::numeric_limits<uint64_t>::max() / kNumShards + (kNumShards > 1);
 #endif
 
-//constexpr size_t kDramCapacity = 10 * (1ull << 30);
-//constexpr size_t kMemTableCapacity = 64 * (1ull << 20);
-//constexpr int kMaxNumMemTables = 4;
+// constexpr size_t kDramCapacity = 10 * (1ull << 30);
+// constexpr size_t kMemTableCapacity = 64 * (1ull << 20);
+// constexpr int kMaxNumMemTables = 4;
 constexpr int kMaxNumMemTables = 4;
-//constexpr size_t kMemTableCapacity = 256 * (1ull << 20);
+// constexpr size_t kMemTableCapacity = 256 * (1ull << 20);
 constexpr size_t kMemTableCapacity = 1 * (1ull << 30) / kMaxNumMemTables;
 
 constexpr int kMaxHeight = 15;
@@ -72,18 +74,18 @@ constexpr int kNumLevels = kNumDramLevels + kNumPmemLevels;
 
 constexpr int kNumWorkers = 80;
 
-constexpr size_t kPmemLogBlockSize = 4 * (1ull<<20) / kNumShards;
+constexpr size_t kPmemLogBlockSize = 4 * (1ull << 20) / kNumShards;
 constexpr size_t kPmemBlobBlockSize = kPmemLogBlockSize;
 
-//constexpr uint64_t kHTMask = 0x0fffffff;
+// constexpr uint64_t kHTMask = 0x0fffffff;
 #ifndef LISTDB_SKIPLIST_CACHE
-//constexpr size_t kHTSize = kHTMask + 1;
+// constexpr size_t kHTSize = kHTMask + 1;
 constexpr size_t kHTSize = 150ull * 1000 * 1000;
 #else
 #if LISTDB_L0_CACHE != L0_CACHE_T_SIMPLE
-constexpr size_t kHTSize = ((1024ull<<20) - kSkipListCacheCapacity) / 8;
+constexpr size_t kHTSize = ((1024ull << 20) - kSkipListCacheCapacity) / 8;
 #else
-constexpr size_t kHTSize = ((1024ull<<20) - kSkipListCacheCapacity) / 24;
+constexpr size_t kHTSize = ((1024ull << 20) - kSkipListCacheCapacity) / 24;
 #endif
 #endif
 
@@ -94,15 +96,9 @@ enum ValueType {
   kTypeDeletion = 0x3
 };
 
-enum class TableType {
-  kMemTable,
-  kPmemTable
-};
+enum class TableType { kMemTable, kPmemTable };
 
-enum class TaskType {
-  kMemTableFlush,
-  kL0Compaction
-};
+enum class TaskType { kMemTableFlush, kL0Compaction };
 
 inline void SetAffinity(int coreid) {
   coreid = coreid % sysconf(_SC_NPROCESSORS_ONLN);
@@ -118,17 +114,17 @@ inline void SetAffinity(int coreid) {
 }
 
 inline int GetChip() {
-  unsigned long a,d,c;
-  asm volatile("rdtscp" : "=a" (a), "=d" (d), "=c" (c));
-  int chip = (c & 0xFFF000)>>12;
-  //int core = c & 0xFFF;
+  unsigned long a, d, c;
+  asm volatile("rdtscp" : "=a"(a), "=d"(d), "=c"(c));
+  int chip = (c & 0xFFF000) >> 12;
+  // int core = c & 0xFFF;
   return chip;
 }
 
 inline int GetCore() {
-  unsigned long a,d,c;
-  asm volatile("rdtscp" : "=a" (a), "=d" (d), "=c" (c));
-  //int chip = (c & 0xFFF000)>>12;
+  unsigned long a, d, c;
+  asm volatile("rdtscp" : "=a"(a), "=d"(d), "=c"(c));
+  // int chip = (c & 0xFFF000)>>12;
   int core = c & 0xFFF;
   return core;
 }

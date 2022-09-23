@@ -7,4 +7,7 @@ build:
 client:
 	./build/db_client_test
 
+hotcold:
+	./build/hot_cold_test
+
 .PHONY: build

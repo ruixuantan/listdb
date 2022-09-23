@@ -2,17 +2,16 @@
 #define LISTDB_CORE_PMEM_LOG_H_
 
 #include <functional>
-#include <mutex>
-
 #include <libpmemobj++/make_persistent_atomic.hpp>
 #include <libpmemobj++/p.hpp>
 #include <libpmemobj++/persistent_ptr.hpp>
 #include <libpmemobj++/pool.hpp>
+#include <mutex>
 
 #include "listdb/common.h"
+#include "listdb/lib/memory.h"
 #include "listdb/pmem/pmem.h"
 #include "listdb/pmem/pmem_ptr.h"
-#include "listdb/lib/memory.h"
 
 template <typename T>
 using Pool = pmem::obj::pool<T>;
@@ -45,7 +44,8 @@ struct pmem_log_block {
   char data[kPmemLogBlockSize];
   pmem::obj::persistent_ptr<pmem_log_block> next;
 
-  pmem_log_block(pmem::obj::persistent_ptr<pmem_log_block> next_ = nullptr) : p(0), data(), next(next_) { }
+  pmem_log_block(pmem::obj::persistent_ptr<pmem_log_block> next_ = nullptr)
+      : p(0), data(), next(next_) {}
 };
 
 // PmemLog
@@ -54,14 +54,16 @@ class PmemLog {
  public:
   struct Block {
     std::atomic<size_t> p;  // current end
-    char* data;  // pointer to pmem_log_block::data
+    char* data;             // pointer to pmem_log_block::data
     pmem::obj::persistent_ptr<pmem_log_block> p_block;
 
     explicit Block(pmem::obj::persistent_ptr<pmem_log_block> p_block_);
     void* Allocate(const size_t size);
   };
-  
+
   PmemLog(const int pool_id, const int shard_id);
+
+  PmemLog(const int pool_id, const int shard_id, HCPmem& pmem);
 
   ~PmemLog();
 
@@ -93,7 +95,7 @@ PmemLog::Block::Block(pmem::obj::persistent_ptr<pmem_log_block> p_block_) {
 void* PmemLog::Block::Allocate(const size_t size) {
   size_t before = p.fetch_add(size, MO_RELAXED);
   if (before + size <= kPmemLogBlockSize) {
-    return (void*) (data + before);
+    return (void*)(data + before);
   } else {
     return nullptr;
   }
@@ -127,6 +129,27 @@ PmemLog::PmemLog(const int pool_id, const int shard_id) : pool_id_(pool_id) {
   }
 }
 
+PmemLog::PmemLog(const int pool_id, const int shard_id, HCPmem& pmem)
+    : pool_id_(pool_id) {
+  auto pool = pmem.pool<pmem_log_root>(pool_id_);
+  pool_ = pool;
+  auto root = pool_.root();
+  if (root->shard[shard_id] == nullptr) {
+    // Create
+    pmem::obj::persistent_ptr<pmem_log> p_log;
+    pmem::obj::make_persistent_atomic<pmem_log>(pool_, p_log);
+    p_log->block_cnt = 0;
+    root->shard[shard_id] = p_log;
+    p_log_ = p_log;
+    front_.store(nullptr);
+  } else {
+    // Open
+    p_log_ = root->shard[shard_id];
+    auto head_block = new Block(p_log_->head);
+    front_.store(head_block);
+  }
+}
+
 PmemLog::~PmemLog() {
   auto block = GetCurrentBlock();
   block->p_block->p = block->p;
@@ -134,13 +157,14 @@ PmemLog::~PmemLog() {
 }
 
 PmemLog::Block* PmemLog::GetCurrentBlock() {
-  Block* ret = front_.load(MO_RELAXED); 
+  Block* ret = front_.load(MO_RELAXED);
   if (ret == nullptr) {
     std::lock_guard<std::mutex> lk(block_init_mu_);
     ret = front_.load(MO_RELAXED);
     if (ret == nullptr) {
       pmem::obj::persistent_ptr<pmem_log_block> p_new_block;
-      pmem::obj::make_persistent_atomic<pmem_log_block>(pool_, p_new_block, p_log_->head);
+      pmem::obj::make_persistent_atomic<pmem_log_block>(pool_, p_new_block,
+                                                        p_log_->head);
 
       p_new_block->id = p_log_->block_cnt;
       p_log_->block_cnt++;
@@ -163,7 +187,8 @@ PmemPtr PmemLog::Allocate(const size_t size) {
     if ((buf = block->Allocate(size)) == nullptr) {
       // TODO: write Block contents to pmem_log_block
       pmem::obj::persistent_ptr<pmem_log_block> p_new_block;
-      pmem::obj::make_persistent_atomic<pmem_log_block>(pool_, p_new_block, p_log_->head);
+      pmem::obj::make_persistent_atomic<pmem_log_block>(pool_, p_new_block,
+                                                        p_log_->head);
 
       p_new_block->id = p_log_->block_cnt;
       p_log_->block_cnt++;
@@ -174,7 +199,7 @@ PmemPtr PmemLog::Allocate(const size_t size) {
       buf = new_block->Allocate(size);
     }
   }
-  PmemPtr ret(pool_id_, (uint64_t) ((uintptr_t) buf - (uintptr_t) pool_.handle()));
+  PmemPtr ret(pool_id_, (uint64_t)((uintptr_t)buf - (uintptr_t)pool_.handle()));
   return ret;
 }
 

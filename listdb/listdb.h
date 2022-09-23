@@ -1,20 +1,19 @@
 #ifndef LISTDB_LISTDB_H_
 #define LISTDB_LISTDB_H_
 
+#include <numa.h>
+
 #include <deque>
+#include <experimental/filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <libpmemobj++/pexceptions.hpp>
 #include <queue>
 #include <sstream>
 #include <stack>
 #include <thread>
 #include <unordered_map>
-
-#include <experimental/filesystem>
-
-#include <libpmemobj++/pexceptions.hpp>
-#include <numa.h>
 
 #include "listdb/common.h"
 #ifdef LISTDB_L1_LRU
@@ -23,12 +22,12 @@
 #ifdef LISTDB_SKIPLIST_CACHE
 #include "listdb/core/skiplist_cache.h"
 #endif
-#include "listdb/core/pmem_blob.h"
-#include "listdb/core/pmem_log.h"
-#include "listdb/core/static_hashtable_cache.h"
 #include "listdb/core/double_hashing_cache.h"
 #include "listdb/core/linear_probing_hashtable_cache.h"
+#include "listdb/core/pmem_blob.h"
 #include "listdb/core/pmem_db.h"
+#include "listdb/core/pmem_log.h"
+#include "listdb/core/static_hashtable_cache.h"
 #include "listdb/index/braided_pmem_skiplist.h"
 #include "listdb/index/lockfree_skiplist.h"
 #include "listdb/index/simple_hash_table.h"
@@ -36,6 +35,7 @@
 #include "listdb/lsm/memtable_list.h"
 #include "listdb/lsm/pmemtable.h"
 #include "listdb/lsm/pmemtable_list.h"
+#include "listdb/tasks/Task.h"
 #include "listdb/util/clock.h"
 #include "listdb/util/random.h"
 #include "listdb/util/reporter.h"
@@ -46,9 +46,12 @@
 
 //#define REPORT_BACKGROUND_WORKS
 #ifdef REPORT_BACKGROUND_WORKS
-#define INIT_REPORTER_CLIENT auto reporter_client = new ReporterClient(reporter_)
-#define REPORT_FLUSH_OPS(x) reporter_client->ReportFinishedOps(Reporter::OpType::kFlush, x)
-#define REPORT_COMPACTION_OPS(x) reporter_client->ReportFinishedOps(Reporter::OpType::kCompaction, x)
+#define INIT_REPORTER_CLIENT \
+  auto reporter_client = new ReporterClient(reporter_)
+#define REPORT_FLUSH_OPS(x) \
+  reporter_client->ReportFinishedOps(Reporter::OpType::kFlush, x)
+#define REPORT_COMPACTION_OPS(x) \
+  reporter_client->ReportFinishedOps(Reporter::OpType::kCompaction, x)
 #define REPORT_DONE delete reporter_client
 #else
 #define INIT_REPORTER_CLIENT
@@ -56,8 +59,6 @@
 #define REPORT_COMPACTION_OPS(x)
 #define REPORT_DONE
 #endif
-
-constexpr std::string_view PATH_PREFIX = "/optane/ruixuan/ldb";
 
 //#define L0_COMPACTION_ON_IDLE
 //#define L0_COMPACTION_YIELD
@@ -69,40 +70,6 @@ class ListDB {
   using MemNode = lockfree_skiplist::Node;
   using PmemNode = BraidedPmemSkipList::Node;
 
-  struct Task {
-    TaskType type;
-    int shard;
-  };
-
-  struct MemTableFlushTask : Task {
-    MemTable* imm;
-    MemTableList* memtable_list;
-  };
-
-  struct L0CompactionTask : Task {
-    PmemTable* l0;
-    MemTableList* memtable_list;
-  };
-
-  struct alignas(64) CompactionWorkerData {
-    int id;
-    bool stop;
-    Random rnd = Random(0);
-    std::queue<Task*> q;
-    std::mutex mu;
-    std::condition_variable cv;
-    Task* current_task;
-    uint64_t flush_cnt = 0;
-    uint64_t flush_time_usec = 0;
-    //uint64_t compaction_cnt = 0;
-    //uint64_t compaction_time_usec = 0;
-  };
-
-  enum class ServiceStatus {
-    kActive,
-    kStop,
-  };
-
   ~ListDB();
 
   void Init();
@@ -111,7 +78,7 @@ class ListDB {
 
   void Close();
 
-  //void Put(const Key& key, const Value& value);
+  // void Put(const Key& key, const Value& value);
 
   void WaitForStableState();
 
@@ -140,10 +107,14 @@ class ListDB {
   PmemLog* log(int region, int shard) { return log_[region][shard]; }
 
 #ifdef LISTDB_WISCKEY
-  PmemBlob* value_blob(const int region, const int shard) { return value_blob_[region][shard]; }
+  PmemBlob* value_blob(const int region, const int shard) {
+    return value_blob_[region][shard];
+  }
 #endif
 
-  int pool_id_to_region(const int pool_id) { return pool_id_to_region_[pool_id]; }
+  int pool_id_to_region(const int pool_id) {
+    return pool_id_to_region_[pool_id];
+  }
 
   int l0_pool_id(const int region) { return l0_pool_id_[region]; }
 
@@ -174,7 +145,9 @@ class ListDB {
   int GetStatString(const std::string& name, std::string* buf);
 
 #ifdef LISTDB_L1_LRU
-  std::vector<std::pair<uint64_t, uint64_t>>& sorted_arr(int r, int s) { return sorted_arr_[r][s]; }
+  std::vector<std::pair<uint64_t, uint64_t>>& sorted_arr(int r, int s) {
+    return sorted_arr_[r][s];
+  }
   LruSkipList* lru_cache(int s, int r) { return cache_[s][r]; }
 
   size_t total_sorted_arr_size() {
@@ -215,9 +188,9 @@ class ListDB {
   std::unordered_map<int, int> l0_pool_id_;
   std::unordered_map<int, int> l1_pool_id_;
 
-  //std::queue<MemTableFlushTask*> memtable_flush_queue_;
-  //std::mutex bg_mu_;
-  //std::condition_variable bg_cv_;
+  // std::queue<MemTableFlushTask*> memtable_flush_queue_;
+  // std::mutex bg_mu_;
+  // std::condition_variable bg_cv_;
 
   std::deque<Task*> work_request_queue_;
   std::deque<Task*> work_completion_queue_;
@@ -232,7 +205,8 @@ class ListDB {
   std::thread worker_threads_[kNumWorkers];
 
 #ifdef LISTDB_L1_LRU
-  std::vector<std::pair<uint64_t, uint64_t>> sorted_arr_[kNumRegions][kNumShards];
+  std::vector<std::pair<uint64_t, uint64_t>> sorted_arr_[kNumRegions]
+                                                        [kNumShards];
   LruSkipList* cache_[kNumShards][kNumRegions];
 #endif
 
@@ -244,7 +218,6 @@ class ListDB {
   std::mutex mu_;
 };
 
-
 ListDB::~ListDB() {
   fprintf(stdout, "D \n");
   Close();
@@ -252,12 +225,13 @@ ListDB::~ListDB() {
 
 void ListDB::Init() {
   std::stringstream pss;
-  pss << PATH_PREFIX << "/listdb";
+  pss << kPathPrefix << "/listdb";
   std::string db_path = pss.str();
   fs::remove_all(db_path);
-  int root_pool_id = Pmem::BindPool<pmem_db>(db_path, "", 64*1024*1024);
+  int root_pool_id = Pmem::BindPool<pmem_db>(db_path, "", 64 * 1024 * 1024);
   if (root_pool_id != 0) {
-    std::cerr << "root_pool_id must be zero (current: " << root_pool_id << ")\n";
+    std::cerr << "root_pool_id must be zero (current: " << root_pool_id
+              << ")\n";
     exit(1);
   }
   auto db_pool = Pmem::pool<pmem_db>(root_pool_id);
@@ -275,7 +249,7 @@ void ListDB::Init() {
   // Log Pmem Pool
   for (int i = 0; i < kNumRegions; i++) {
     std::stringstream pss;
-    pss << PATH_PREFIX << "/" << i << "/listdb_log";
+    pss << kPathPrefix << "/" << i << "/listdb_log";
     std::string path = pss.str();
     fs::remove_all(path);
     fs::create_directories(path);
@@ -305,18 +279,18 @@ void ListDB::Init() {
     }
   }
 #else
-  #if LISTDB_FLUSH_MEMTABLE_TO_L1 == 1
+#if LISTDB_FLUSH_MEMTABLE_TO_L1 == 1
   for (int i = 0; i < kNumRegions; i++) {
     l0_pool_id_[i] = log_pool_id_[i];
     for (int j = 0; j < kNumShards; j++) {
       l0_arena_[i][j] = log_[i][j];
     }
   }
-  #else
+#else
   // WAL
   for (int i = 0; i < kNumRegions; i++) {
     std::stringstream pss;
-    pss << PATH_PREFIX << "/" << i << "/listdb_nonunified_l0";
+    pss << kPathPrefix << "/" << i << "/listdb_nonunified_l0";
     std::string path = pss.str();
     fs::remove_all(path);
     fs::create_directories(path);
@@ -337,13 +311,14 @@ void ListDB::Init() {
       l0_arena_[i][j] = new PmemLog(pool_id, j);
     }
   }
-  #endif
+#endif
 #endif
 
 #ifdef LISTDB_WISCKEY
   for (int i = 0; i < kNumRegions; i++) {
     std::stringstream pss;
-    pss << "PATH_PREFIX" << "/" << i << "/listdb_value";
+    pss << "kPathPrefix"
+        << "/" << i << "/listdb_value";
     std::string path = pss.str();
     fs::remove_all(path);
     fs::create_directories(path);
@@ -369,7 +344,8 @@ void ListDB::Init() {
   // Pmem Pool for L1
   for (int i = 0; i < kNumRegions; i++) {
     std::stringstream pss;
-    pss << "PATH_PREFIX" << "/" << i << "/listdb_l1";
+    pss << "kPathPrefix"
+        << "/" << i << "/listdb_l1";
     std::string path = pss.str();
     fs::remove_all(path);
     fs::create_directories(path);
@@ -406,7 +382,7 @@ void ListDB::Init() {
     {
       auto tl = new MemTableList(kMemTableCapacity / kNumShards, i);
       tl->BindEnqueueFunction([&, tl, i](MemTable* mem) {
-        //fprintf(stdout, "binded enq fn, mem = %p\n", mem);
+        // fprintf(stdout, "binded enq fn, mem = %p\n", mem);
         auto task = new MemTableFlushTask();
         task->type = TaskType::kMemTableFlush;
         task->shard = i;
@@ -425,7 +401,8 @@ void ListDB::Init() {
 
     // L1 List
     {
-      auto tl = new PmemTableList(std::numeric_limits<size_t>::max(), l1_arena_[0][0]->pool_id());
+      auto tl = new PmemTableList(std::numeric_limits<size_t>::max(),
+                                  l1_arena_[0][0]->pool_id());
       for (int j = 0; j < kNumRegions; j++) {
         tl->BindArena(l1_arena_[j][i]->pool_id(), l1_arena_[j][i]);
       }
@@ -437,7 +414,7 @@ void ListDB::Init() {
   for (int i = 0; i < kNumShards; i++) {
     auto l1_tl = ll_[i]->GetTableList(1);
     // TODO: impl InitFrontOnce() and use it instead of GetFront()
-    [[maybe_unused]] auto l1_table = (PmemTable*) l1_tl->GetFront();
+    [[maybe_unused]] auto l1_table = (PmemTable*)l1_tl->GetFront();
   }
 #endif
 
@@ -451,7 +428,9 @@ void ListDB::Init() {
 #ifdef LISTDB_SKIPLIST_CACHE
   for (int i = 0; i < kNumShards; i++) {
     for (int j = 0; j < kNumRegions; j++) {
-      cache_[i][j] = new SkipListCacheRep(l1_arena_[j][i]->pool_id(), kSkipListCacheCapacity / kNumShards / kNumRegions);
+      cache_[i][j] = new SkipListCacheRep(
+          l1_arena_[j][i]->pool_id(),
+          kSkipListCacheCapacity / kNumShards / kNumRegions);
     }
   }
 #endif
@@ -482,23 +461,26 @@ void ListDB::Init() {
   for (int i = 0; i < kNumWorkers; i++) {
     worker_data_[i].id = i;
     worker_data_[i].stop = false;
-    worker_threads_[i] = std::thread(std::bind(&ListDB::CompactionWorkerThreadLoop, this, &worker_data_[i]));
+    worker_threads_[i] = std::thread(
+        std::bind(&ListDB::CompactionWorkerThreadLoop, this, &worker_data_[i]));
 
-    //sched_param sch;
-    //int policy; 
-    //pthread_getschedparam(worker_threads_[i].native_handle(), &policy, &sch);
-    //sch.sched_priority = 20;
-    //pthread_setschedparam(worker_threads_[i].native_handle(), SCHED_FIFO, &sch);
+    // sched_param sch;
+    // int policy;
+    // pthread_getschedparam(worker_threads_[i].native_handle(), &policy, &sch);
+    // sch.sched_priority = 20;
+    // pthread_setschedparam(worker_threads_[i].native_handle(), SCHED_FIFO,
+    // &sch);
   }
 }
 
 void ListDB::Open() {
   std::stringstream pss;
-  pss << PATH_PREFIX << "/listdb";
+  pss << kPathPrefix << "/listdb";
   std::string db_path = pss.str();
-  int root_pool_id = Pmem::BindPool<pmem_db>(db_path, "", 64*1024*1024);
+  int root_pool_id = Pmem::BindPool<pmem_db>(db_path, "", 64 * 1024 * 1024);
   if (root_pool_id != 0) {
-    std::cerr << "root_pool_id must be zero (current: " << root_pool_id << ")\n";
+    std::cerr << "root_pool_id must be zero (current: " << root_pool_id
+              << ")\n";
     exit(1);
   }
   auto db_pool = Pmem::pool<pmem_db>(root_pool_id);
@@ -507,13 +489,13 @@ void ListDB::Open() {
   // Log Pmem Pool
   for (int i = 0; i < kNumRegions; i++) {
     std::stringstream pss;
-    pss << PATH_PREFIX << "/" << i << "/wkim/listdb_log";
+    pss << kPathPrefix << "/" << i << "/listdb_log";
     std::string path = pss.str();
     std::string poolset = path + ".set";
 
     int pool_id = Pmem::BindPoolSet<pmem_log_root>(poolset, "");
     pool_id_to_region_[pool_id] = i;
-    //auto pool = Pmem::pool<pmem_log_root>(pool_id);
+    // auto pool = Pmem::pool<pmem_log_root>(pool_id);
     l0_pool_id_[i] = pool_id;
 
     for (int j = 0; j < kNumShards; j++) {
@@ -529,14 +511,14 @@ void ListDB::Open() {
     }
   }
 #else
-  std::cerr << "Open() for LISTDB_WAL is not implemented." << std:endl;
+  std::cerr << "Open() for LISTDB_WAL is not implemented." << std : endl;
   exit(1);
 #endif
 
 #ifdef LISTDB_WISCKEY
   for (int i = 0; i < kNumRegions; i++) {
     std::stringstream pss;
-    pss << PATH_PREFIX << "/" << i << "/wkim/listdb_value";
+    pss << kPathPrefix << "/" << i << "/wkim/listdb_value";
     std::string path = pss.str();
     std::string poolset = path + ".set";
 
@@ -551,7 +533,7 @@ void ListDB::Open() {
 #endif
 
 #ifdef L1_COW
-  std::cerr << "Open() for L0 CoW compaction is not implemented." << std:endl;
+  std::cerr << "Open() for L0 CoW compaction is not implemented." << std : endl;
   exit(1);
 #else
   for (int i = 0; i < kNumRegions; i++) {
@@ -570,7 +552,7 @@ void ListDB::Open() {
     {
       auto tl = new MemTableList(kMemTableCapacity / kNumShards, i);
       tl->BindEnqueueFunction([&, tl, i](MemTable* mem) {
-        //fprintf(stdout, "binded enq fn, mem = %p\n", mem);
+        // fprintf(stdout, "binded enq fn, mem = %p\n", mem);
         auto task = new MemTableFlushTask();
         task->type = TaskType::kMemTableFlush;
         task->shard = i;
@@ -589,7 +571,8 @@ void ListDB::Open() {
 
     // L1 List
     {
-      auto tl = new PmemTableList(std::numeric_limits<size_t>::max(), l1_arena_[0][0]->pool_id());
+      auto tl = new PmemTableList(std::numeric_limits<size_t>::max(),
+                                  l1_arena_[0][0]->pool_id());
       for (int j = 0; j < kNumRegions; j++) {
         tl->BindArena(l1_arena_[j][i]->pool_id(), l1_arena_[j][i]);
       }
@@ -628,7 +611,7 @@ void ListDB::Open() {
       size_t l0_insert_cnt = 0;
       int shard_begin = (kNumShards / kNumRecoveryThreads) * wid;
       int shard_end = (kNumShards / kNumRecoveryThreads) * (wid + 1);
-      for (int i = shard_begin ; i < shard_end; i++) {
+      for (int i = shard_begin; i < shard_end; i++) {
         auto shard = db_root->shard[i];
 
         // read l1 info
@@ -636,21 +619,24 @@ void ListDB::Open() {
         if (l1_info) {
           l1_recovery_cnt++;
           // Prepare L1 SkipList
-          auto l1_skiplist = new BraidedPmemSkipList(l1_arena_[0][0]->pool_id());
+          auto l1_skiplist =
+              new BraidedPmemSkipList(l1_arena_[0][0]->pool_id());
           for (int j = 0; j < kNumRegions; j++) {
             int pool_id = l1_pool_id_[j];
             l1_skiplist->BindArena(pool_id, l1_arena_[j][i]);
-            l1_skiplist->BindHead(pool_id, (void*) l1_info->head[j].get());
+            l1_skiplist->BindHead(pool_id, (void*)l1_info->head[j].get());
           }
-          auto l1_table = new PmemTable(std::numeric_limits<size_t>::max(), l1_skiplist);
-          //l1_table->SetSize(kMemTableCapacity);
+          auto l1_table =
+              new PmemTable(std::numeric_limits<size_t>::max(), l1_skiplist);
+          // l1_table->SetSize(kMemTableCapacity);
           auto l1_tl = ll_[i]->GetTableList(1);
           l1_tl->SetFront(l1_table);
         }
 
         auto memtable_list = GetTableList<MemTableList>(0, i);
         // L0 list
-        // Initial -> Persist -> Persist -> ... -> Merging -> Merged -> Merged -> ...
+        // Initial -> Persist -> Persist -> ... -> Merging -> Merged -> Merged
+        // -> ...
         auto pred_l0_info = shard->l0_list_head;
         auto curr_l0_info = pred_l0_info->next;
         std::deque<pmem::obj::persistent_ptr<pmem_l0_info>> l0_manifests;
@@ -659,8 +645,10 @@ void ListDB::Open() {
           if (curr_l0_info->status == Level0Status::kMergeDone) {
             merge_done_cnt++;
             for (int j = 0; j < kNumRegions; j++) {
-              size_t head_node_size = sizeof(PmemNode) + (kMaxHeight - 1) * sizeof(uint64_t);
-              pmem::obj::delete_persistent_atomic<char[]>(curr_l0_info->head[j], head_node_size);
+              size_t head_node_size =
+                  sizeof(PmemNode) + (kMaxHeight - 1) * sizeof(uint64_t);
+              pmem::obj::delete_persistent_atomic<char[]>(curr_l0_info->head[j],
+                                                          head_node_size);
             }
             auto succ_l0_info = curr_l0_info->next;
             // TODO(wkim): do the followings as a transaction
@@ -675,17 +663,18 @@ void ListDB::Open() {
         }
 
         // Collect log blocks
-        std::deque<pmem::obj::persistent_ptr<pmem_log_block>> log_blocks[kNumRegions];
+        std::deque<pmem::obj::persistent_ptr<pmem_log_block>>
+            log_blocks[kNumRegions];
         for (int j = 0; j < kNumRegions; j++) {
-          //int pool_id = log_[j][i]->pool_id();
+          // int pool_id = log_[j][i]->pool_id();
           auto pool = log_[j][i]->pool();
           auto log_shard = pool.root()->shard[i];
-          //curr_log_block[j] = log_shard->head;
-          //cursor[j].p_block = log_shard->head;
-          //cursor[j].data = cursor[j].p_block->data;
+          // curr_log_block[j] = log_shard->head;
+          // cursor[j].p_block = log_shard->head;
+          // cursor[j].data = cursor[j].p_block->data;
           auto curr_block = log_shard->head;
           while (curr_block) {
-            PmemNode* first_record = (PmemNode*) curr_block->data;
+            PmemNode* first_record = (PmemNode*)curr_block->data;
             log_blocks[j].push_front(curr_block);
             if (first_record->l0_id() < min_l0_id) {
               break;
@@ -697,8 +686,9 @@ void ListDB::Open() {
         struct LogCursor {
           char* data = nullptr;
           uint64_t offset = 0;
-          std::deque<pmem::obj::persistent_ptr<pmem_log_block>>::iterator block_iter;
-          //pmem::obj::persistent_ptr<pmem_log_block> p_block = nullptr;
+          std::deque<pmem::obj::persistent_ptr<pmem_log_block>>::iterator
+              block_iter;
+          // pmem::obj::persistent_ptr<pmem_log_block> p_block = nullptr;
 
           char* p() { return data + offset; }
         } cursor[kNumRegions];
@@ -711,12 +701,13 @@ void ListDB::Open() {
         // l0_manifests: oldest to newest
         for (auto& l0 : l0_manifests) {
           // Prepare L0 SkipList
-          auto l0_skiplist = new BraidedPmemSkipList(l0_arena_[0][0]->pool_id());
+          auto l0_skiplist =
+              new BraidedPmemSkipList(l0_arena_[0][0]->pool_id());
           for (int j = 0; j < kNumRegions; j++) {
             int pool_id = l0_arena_[j][i]->pool_id();
             int region = pool_id_to_region_[pool_id];
             l0_skiplist->BindArena(pool_id, l0_arena_[j][i]);
-            l0_skiplist->BindHead(pool_id, (void*) l0->head[region].get());
+            l0_skiplist->BindHead(pool_id, (void*)l0->head[region].get());
           }
 
           if (l0->status == Level0Status::kMergeInitiated) {
@@ -727,8 +718,8 @@ void ListDB::Open() {
             l0_persisted_cnt++;
             auto l0_table = new PmemTable(kMemTableCapacity, l0_skiplist);
             l0_table->SetSize(kMemTableCapacity);
-            //memtable_list->PushFront(l0_table);
-            tables.push_back((Table*) l0_table);
+            // memtable_list->PushFront(l0_table);
+            tables.push_back((Table*)l0_table);
           } else if (l0->status == Level0Status::kFull) {
             l0_recovery_cnt++;
             // Reset L0 skiplist
@@ -744,32 +735,39 @@ void ListDB::Open() {
             for (int j = 0; j < kNumRegions; j++) {
               int pool_id = log_[j][i]->pool_id();
               auto pool = log_[j][i]->pool();
-              //auto log_shard = pool.root()->shard[i];
+              // auto log_shard = pool.root()->shard[i];
 
               bool current_table_done = false;
               while (cursor[j].block_iter != log_blocks[j].end()) {
                 while (cursor[j].offset < kPmemLogBlockSize - 7) {
                   char* p = cursor[j].p();
-                  PmemNode* p_node = (PmemNode*) p;
+                  PmemNode* p_node = (PmemNode*)p;
                   if (!p_node->key.Valid()) {
                     break;
                   }
-        //fprintf(stdout, "key: %s,%zu\nheight=%d\nl0_id=%u/%lu\nvalue=%zu\n", std::string(p_node->key.data(), 8).c_str(), *((uint64_t*) &p_node->key), p_node->height(), p_node->l0_id(), l0->id, p_node->value);
+                  // fprintf(stdout, "key:
+                  // %s,%zu\nheight=%d\nl0_id=%u/%lu\nvalue=%zu\n",
+                  // std::string(p_node->key.data(), 8).c_str(), *((uint64_t*)
+                  // &p_node->key), p_node->height(), p_node->l0_id(), l0->id,
+                  // p_node->value);
                   if (p_node->l0_id() > l0->id) {
                     current_table_done = true;
                     break;
                   }
                   if (p_node->l0_id() == l0->id) {
                     // DO REPLAY
-                    PmemPtr node_paddr(pool_id, (uint64_t) ((uintptr_t) p - (uintptr_t) pool.handle()));
+                    PmemPtr node_paddr(
+                        pool_id,
+                        (uint64_t)((uintptr_t)p - (uintptr_t)pool.handle()));
                     l0_skiplist->Insert(node_paddr);
                     l0_insert_cnt++;
                   }
                   int height = p_node->height();
-                  size_t iul_entry_size = sizeof(PmemNode) + (height - 1) * sizeof(uint64_t);
+                  size_t iul_entry_size =
+                      sizeof(PmemNode) + (height - 1) * sizeof(uint64_t);
                   cursor[j].offset += iul_entry_size;
                 }
-                if (current_table_done)  {
+                if (current_table_done) {
                   break;
                 }
                 ++cursor[j].block_iter;
@@ -782,8 +780,8 @@ void ListDB::Open() {
 
             auto l0_table = new PmemTable(kMemTableCapacity, l0_skiplist);
             l0_table->SetSize(kMemTableCapacity);
-            //memtable_list->PushFront(l0_table);
-            tables.push_back((Table*) l0_table);
+            // memtable_list->PushFront(l0_table);
+            tables.push_back((Table*)l0_table);
           } else if (l0->status == Level0Status::kInitialized) {
             memtable_recovery_cnt++;
             // Reset L0 skiplist
@@ -805,17 +803,21 @@ void ListDB::Open() {
             for (int j = 0; j < kNumRegions; j++) {
               int pool_id = log_[j][i]->pool_id();
               auto pool = log_[j][i]->pool();
-              //auto log_shard = pool.root()->shard[i];
+              // auto log_shard = pool.root()->shard[i];
 
               bool current_table_done = false;
               while (cursor[j].block_iter != log_blocks[j].end()) {
                 while (cursor[j].offset < kPmemLogBlockSize - 7) {
                   char* p = cursor[j].p();
-                  PmemNode* p_node = (PmemNode*) p;
+                  PmemNode* p_node = (PmemNode*)p;
                   if (!p_node->key.Valid()) {
                     break;
                   }
-        //fprintf(stdout, "key: %s,%zu\nheight=%d\nl0_id=%u/%lu\nvalue=%zu\n", std::string(p_node->key.data(), 8).c_str(), *((uint64_t*) &p_node->key), p_node->height(), p_node->l0_id(), l0->id, p_node->value);
+                  // fprintf(stdout, "key:
+                  // %s,%zu\nheight=%d\nl0_id=%u/%lu\nvalue=%zu\n",
+                  // std::string(p_node->key.data(), 8).c_str(), *((uint64_t*)
+                  // &p_node->key), p_node->height(), p_node->l0_id(), l0->id,
+                  // p_node->value);
                   if (p_node->l0_id() > l0->id) {
                     current_table_done = true;
                     break;
@@ -823,24 +825,28 @@ void ListDB::Open() {
                   int height = p_node->height();
                   if (p_node->l0_id() == l0->id) {
                     // DO REPLAY
-                    PmemPtr log_paddr(pool_id, (uint64_t) ((uintptr_t) p - (uintptr_t) pool.handle()));
+                    PmemPtr log_paddr(
+                        pool_id,
+                        (uint64_t)((uintptr_t)p - (uintptr_t)pool.handle()));
 
                     // Create skiplist node
-                    MemNode* node = (MemNode*) malloc(sizeof(MemNode) + (height - 1) * sizeof(uint64_t));
+                    MemNode* node = (MemNode*)malloc(
+                        sizeof(MemNode) + (height - 1) * sizeof(uint64_t));
                     node->key = p_node->key;
                     node->tag = height;
                     node->value = log_paddr.dump();
-                    memset((void*) &node->next[0], 0, height * sizeof(uint64_t));
+                    memset((void*)&node->next[0], 0, height * sizeof(uint64_t));
 
                     kv_size_total += node->key.size() + sizeof(Value);
 
                     skiplist->Insert(node);
                     mem_insert_cnt++;
                   }
-                  size_t iul_entry_size = sizeof(PmemNode) + (height - 1) * sizeof(uint64_t);
+                  size_t iul_entry_size =
+                      sizeof(PmemNode) + (height - 1) * sizeof(uint64_t);
                   cursor[j].offset += iul_entry_size;
                 }
-                if (current_table_done)  {
+                if (current_table_done) {
                   break;
                 }
                 ++cursor[j].block_iter;
@@ -851,24 +857,22 @@ void ListDB::Open() {
               }
             }
             memtable->SetSize(kv_size_total);
-            //memtable_list->PushFront(memtable);
-            tables.push_back((Table*) memtable);
+            // memtable_list->PushFront(memtable);
+            tables.push_back((Table*)memtable);
           } else {
             std::cerr << "Unknown L0 status.\n";
             exit(1);
           }
-
         }
 
-        // Build a MemTable List for this shard with individually initialized tables
-        // tables: oldest to newest
+        // Build a MemTable List for this shard with individually initialized
+        // tables tables: oldest to newest
         for (size_t i = 0; i < tables.size(); i++) {
           if (i > 0) {
-           tables[i]->SetNext(tables[i - 1]);
+            tables[i]->SetNext(tables[i - 1]);
           }
           memtable_list->PushFront(tables[i]);
         }
-
       }
 
       memtable_recovery_cnt_total.fetch_add(memtable_recovery_cnt);
@@ -884,7 +888,8 @@ void ListDB::Open() {
     if (rw.joinable()) rw.join();
   }
   auto recovery_end_tp = std::chrono::steady_clock::now();
-  std::chrono::duration<double> recovery_duration = recovery_end_tp - recovery_begin_tp;
+  std::chrono::duration<double> recovery_duration =
+      recovery_end_tp - recovery_begin_tp;
   fprintf(stdout, "recovery time : %.3lf sec\n", recovery_duration.count());
   fprintf(stdout, "recovery count:\n");
   fprintf(stdout, "  -     memtable: %d\n", memtable_recovery_cnt_total.load());
@@ -929,7 +934,8 @@ void ListDB::Close() {
 }
 
 void ListDB::WaitForStableState() {
-  // TODO(wkim): communicate with the background thread to get informed about the db state
+  // TODO(wkim): communicate with the background thread to get informed about
+  // the db state
   return;
 }
 
@@ -973,13 +979,14 @@ void ListDB::BackgroundThreadLoop() {
     std::deque<Task*> work_completions;
     std::unique_lock<std::mutex> lk(wq_mu_);
     bool schedule_l0_compaction;
-    wq_cv_.wait_for(lk, std::chrono::seconds(1), [&]{
-      //return !work_request_queue_.empty() || !work_completion_queue_.empty();
+    wq_cv_.wait_for(lk, std::chrono::seconds(1), [&] {
+      // return !work_request_queue_.empty() || !work_completion_queue_.empty();
       return !work_request_queue_.empty() || !memtable_flush_requests.empty();
     });
     new_work_requests.swap(work_request_queue_);
     work_completions.swap(work_completion_queue_);
-    schedule_l0_compaction = (l0_compaction_scheduler_status_ == ServiceStatus::kActive);
+    schedule_l0_compaction =
+        (l0_compaction_scheduler_status_ == ServiceStatus::kActive);
     lk.unlock();
 
     for (auto& task : work_completions) {
@@ -998,7 +1005,7 @@ void ListDB::BackgroundThreadLoop() {
       if (task->type == TaskType::kMemTableFlush) {
         memtable_flush_requests.push_back(task);
       } else {
-        fprintf(stdout, "unknown task request: %d\n", (int) task->type);
+        fprintf(stdout, "unknown task request: %d\n", (int)task->type);
         exit(1);
       }
       req_comp_cnt[task->type].req_cnt++;
@@ -1020,8 +1027,8 @@ void ListDB::BackgroundThreadLoop() {
             auto task = new L0CompactionTask();
             task->type = TaskType::kL0Compaction;
             task->shard = i;
-            task->l0 = (PmemTable*) table;
-            task->memtable_list = (MemTableList*) tl;
+            task->l0 = (PmemTable*)table;
+            task->memtable_list = (MemTableList*)tl;
             l0_compaction_state[i] = 1;  // configured
             l0_compaction_requests.push_back(task);
             req_comp_cnt[task->type].req_cnt++;
@@ -1039,9 +1046,11 @@ void ListDB::BackgroundThreadLoop() {
 
     if (!memtable_flush_requests.empty()) {
       while (!available_workers.empty() && !memtable_flush_requests.empty()) {
-        std::sort(available_workers.begin(), available_workers.end(), [&](auto& a, auto& b) {
-          return num_assigned_tasks[a->id] > num_assigned_tasks[b->id];
-        });
+        std::sort(available_workers.begin(), available_workers.end(),
+                  [&](auto& a, auto& b) {
+                    return num_assigned_tasks[a->id] >
+                           num_assigned_tasks[b->id];
+                  });
         auto& worker = available_workers.back();
         auto& task = memtable_flush_requests.front();
         memtable_flush_requests.pop_front();
@@ -1060,17 +1069,18 @@ void ListDB::BackgroundThreadLoop() {
 #endif
     }
 
-    //available_workers.clear();
-    //for (int i = 0; i < kNumWorkers; i++) {
-    //  if (num_assigned_tasks[i] == 0) {
-    //    available_workers.push_back(&worker_data_[i]);
-    //  }
-    //}
+    // available_workers.clear();
+    // for (int i = 0; i < kNumWorkers; i++) {
+    //   if (num_assigned_tasks[i] == 0) {
+    //     available_workers.push_back(&worker_data_[i]);
+    //   }
+    // }
 #ifndef LISTDB_NO_L0_COMPACTION
     while (!available_workers.empty() && !l0_compaction_requests.empty()) {
-      std::sort(available_workers.begin(), available_workers.end(), [&](auto& a, auto& b) {
-        return num_assigned_tasks[a->id] > num_assigned_tasks[b->id];
-      });
+      std::sort(available_workers.begin(), available_workers.end(),
+                [&](auto& a, auto& b) {
+                  return num_assigned_tasks[a->id] > num_assigned_tasks[b->id];
+                });
       auto& worker = available_workers.back();
       auto& task = l0_compaction_requests.front();
       l0_compaction_requests.pop_front();
@@ -1100,7 +1110,7 @@ void ListDB::CompactionWorkerThreadLoop(CompactionWorkerData* td) {
   td->rnd.Reset((td->id + 1) * (td->id + 1));
   while (true) {
     std::unique_lock<std::mutex> lk(td->mu);
-    td->cv.wait(lk, [&]{ return td->stop || !td->q.empty(); });
+    td->cv.wait(lk, [&] { return td->stop || !td->q.empty(); });
     if (td->stop) {
       break;
     }
@@ -1111,14 +1121,14 @@ void ListDB::CompactionWorkerThreadLoop(CompactionWorkerData* td) {
 
     if (task->type == TaskType::kMemTableFlush) {
 #ifndef LISTDB_WAL
-      FlushMemTable((MemTableFlushTask*) task, td);
+      FlushMemTable((MemTableFlushTask*)task, td);
 #else
-      FlushMemTableWAL((MemTableFlushTask*) task, td);
+      FlushMemTableWAL((MemTableFlushTask*)task, td);
 #endif
       td->current_task = nullptr;
     } else if (task->type == TaskType::kL0Compaction) {
-      ZipperCompactionL0(td, (L0CompactionTask*) task);
-      //L0CompactionCopyOnWrite((L0CompactionTask*) task);
+      ZipperCompactionL0(td, (L0CompactionTask*)task);
+      // L0CompactionCopyOnWrite((L0CompactionTask*) task);
       td->current_task = nullptr;
     }
     std::unique_lock<std::mutex> bg_lk(wq_mu_);
@@ -1128,8 +1138,8 @@ void ListDB::CompactionWorkerThreadLoop(CompactionWorkerData* td) {
   }
 }
 
-//void ListDB::Put(const Key& key, const Value& value) {
-//}
+// void ListDB::Put(const Key& key, const Value& value) {
+// }
 
 // Any table this function returns must be unreferenced manually
 // TODO(wkim): Make this function to return a wrapper of table
@@ -1137,32 +1147,32 @@ void ListDB::CompactionWorkerThreadLoop(CompactionWorkerData* td) {
 inline MemTable* ListDB::GetWritableMemTable(size_t kv_size, int shard) {
   auto tl = ll_[shard]->GetTableList(0);
   auto mem = tl->GetMutable(kv_size);
-  return (MemTable*) mem;
+  return (MemTable*)mem;
 }
 
 inline MemTable* ListDB::GetMemTable(int shard) {
   auto tl = ll_[shard]->GetTableList(0);
   auto mem = tl->GetFront();
-  return (MemTable*) mem;
+  return (MemTable*)mem;
 }
 
 #if LISTDB_L0_CACHE == L0_CACHE_T_SIMPLE
-  inline SimpleHashTable* ListDB::GetHashTable(int shard) {
-    //return hash_table_[shard];
-    return hash_table_[0];
-  }
+inline SimpleHashTable* ListDB::GetHashTable(int shard) {
+  // return hash_table_[shard];
+  return hash_table_[0];
+}
 #elif LISTDB_L0_CACHE == L0_CACHE_T_STATIC
-  inline StaticHashTableCache* ListDB::GetHashTable(int shard) {
-    return hash_table_[shard];
-  }
+inline StaticHashTableCache* ListDB::GetHashTable(int shard) {
+  return hash_table_[shard];
+}
 #elif LISTDB_L0_CACHE == L0_CACHE_T_DOUBLE_HASHING
-  inline DoubleHashingCache* ListDB::GetHashTable(int shard) {
-    return hash_table_[shard];
-  }
+inline DoubleHashingCache* ListDB::GetHashTable(int shard) {
+  return hash_table_[shard];
+}
 #elif LISTDB_L0_CACHE == L0_CACHE_T_LINEAR_PROBING
-  inline LinearProbingHashTableCache* ListDB::GetHashTable(int shard) {
-    return hash_table_[shard];
-  }
+inline LinearProbingHashTableCache* ListDB::GetHashTable(int shard) {
+  return hash_table_[shard];
+}
 #endif
 
 inline TableList* ListDB::GetTableList(int level, int shard) {
@@ -1173,7 +1183,7 @@ inline TableList* ListDB::GetTableList(int level, int shard) {
 template <typename T>
 inline T* ListDB::GetTableList(int level, int shard) {
   auto tl = ll_[shard]->GetTableList(level);
-  return (T*) tl;
+  return (T*)tl;
 }
 
 void ListDB::FlushMemTable(MemTableFlushTask* task, CompactionWorkerData* td) {
@@ -1222,21 +1232,23 @@ void ListDB::FlushMemTable(MemTableFlushTask* task, CompactionWorkerData* td) {
   uint64_t begin_micros = Clock::NowMicros();
   INIT_REPORTER_CLIENT;
   while (mem_node) {
-    //std::this_thread::yield();
+    // std::this_thread::yield();
 #ifdef GROUP_LOGGING
-    while (((std::atomic<uint64_t>*) &mem_node->value)->load(std::memory_order_relaxed) == 0) continue;
+    while (((std::atomic<uint64_t>*)&mem_node->value)
+               ->load(std::memory_order_relaxed) == 0)
+      continue;
 #endif
-    int pool_id = ((PmemPtr*) &mem_node->value)->pool_id();
+    int pool_id = ((PmemPtr*)&mem_node->value)->pool_id();
     int region = pool_id_to_region_[pool_id];
-    Node* node = ((PmemPtr*) &mem_node->value)->get<Node>();
+    Node* node = ((PmemPtr*)&mem_node->value)->get<Node>();
     int height = node->height();
     for (int i = 1; i < height; i++) {
-      //std::this_thread::yield();
+      // std::this_thread::yield();
       preds[region][i]->next[i] = mem_node->value;
-      preds[region][i] = ((PmemPtr*) &(preds[region][i]->next[i]))->get<Node>();
+      preds[region][i] = ((PmemPtr*)&(preds[region][i]->next[i]))->get<Node>();
     }
     pred->next[0] = mem_node->value;
-    pred = ((PmemPtr*) &(pred->next[0]))->get<Node>();
+    pred = ((PmemPtr*)&(pred->next[0]))->get<Node>();
 
 #if LISTDB_L0_CACHE == L0_CACHE_T_SIMPLE
     hash_table->Add(mem_node->key, mem_node->value);
@@ -1251,7 +1263,7 @@ void ListDB::FlushMemTable(MemTableFlushTask* task, CompactionWorkerData* td) {
     REPORT_FLUSH_OPS(1);
     flush_cnt++;
 
-    //std::this_thread::yield();
+    // std::this_thread::yield();
     mem_node = mem_node->next[0].load(MO_RELAXED);
   }
   REPORT_DONE;  // Up report all remainings
@@ -1261,13 +1273,14 @@ void ListDB::FlushMemTable(MemTableFlushTask* task, CompactionWorkerData* td) {
 
   PmemTable* l0_table = new PmemTable(kMemTableCapacity, l0_skiplist);
   l0_table->SetManifest(task->imm->l0_manifest());
-  task->imm->SetPersistentTable((Table*) l0_table);
+  task->imm->SetPersistentTable((Table*)l0_table);
   // TODO(wkim): Log this L0 table for recovery
-  //task->imm->FinalizeFlush();
+  // task->imm->FinalizeFlush();
   task->memtable_list->CleanUpFlushedImmutables();
 }
 
-void ListDB::FlushMemTableToL1WAL(MemTableFlushTask* task, CompactionWorkerData* td) {
+void ListDB::FlushMemTableToL1WAL(MemTableFlushTask* task,
+                                  CompactionWorkerData* td) {
   if (task->shard == 0) fprintf(stdout, "MemTable -> L1\n");
   // Check Reference Counter
   while (task->imm->w_RefCount() > 0) {
@@ -1275,7 +1288,7 @@ void ListDB::FlushMemTableToL1WAL(MemTableFlushTask* task, CompactionWorkerData*
   }
 
   auto l1_tl = ll_[task->shard]->GetTableList(1);
-  auto l1_table = (PmemTable*) l1_tl->GetFront();
+  auto l1_table = (PmemTable*)l1_tl->GetFront();
   auto l1_skiplist = l1_table->skiplist();
 
   auto skiplist = task->imm->skiplist();
@@ -1285,8 +1298,8 @@ void ListDB::FlushMemTableToL1WAL(MemTableFlushTask* task, CompactionWorkerData*
   using Node = PmemNode;
   Node* preds[kNumRegions][kMaxHeight];
   uint64_t succs[kNumRegions][kMaxHeight];
-  //Node* pred;
-  //pred = l1_skiplist->head(l1_arena_[0][0]->pool_id());
+  // Node* pred;
+  // pred = l1_skiplist->head(l1_arena_[0][0]->pool_id());
   for (int i = 0; i < kNumRegions; i++) {
     int pool_id = l1_arena_[i][0]->pool_id();
     for (int j = 0; j < kMaxHeight; j++) {
@@ -1299,7 +1312,7 @@ void ListDB::FlushMemTableToL1WAL(MemTableFlushTask* task, CompactionWorkerData*
   uint64_t begin_micros = Clock::NowMicros();
   INIT_REPORTER_CLIENT;
   while (mem_node) {
-    int mem_value_pool_id = ((PmemPtr*) &mem_node->value)->pool_id();
+    int mem_value_pool_id = ((PmemPtr*)&mem_node->value)->pool_id();
     int region = pool_id_to_region_[mem_value_pool_id];
 
 #if 1
@@ -1346,8 +1359,9 @@ void ListDB::FlushMemTableToL1WAL(MemTableFlushTask* task, CompactionWorkerData*
     auto pool = Pmem::pool<pmem_log_root>(mem_value_pool_id);
     pmem::obj::persistent_ptr<char[]> p_buf;
     pmem::obj::make_persistent_atomic<char[]>(pool, p_buf, node_size);
-    Node* node = (PmemNode*) p_buf.get();
-    PmemPtr node_paddr = PmemPtr(mem_value_pool_id, ((uintptr_t) node - (uintptr_t) pool.handle()));
+    Node* node = (PmemNode*)p_buf.get();
+    PmemPtr node_paddr = PmemPtr(mem_value_pool_id,
+                                 ((uintptr_t)node - (uintptr_t)pool.handle()));
     node->tag = height;
     node->value = mem_node->value;
     node->next[0] = succs[0][0];
@@ -1360,7 +1374,7 @@ void ListDB::FlushMemTableToL1WAL(MemTableFlushTask* task, CompactionWorkerData*
     preds[0][0]->next[0] = node_paddr.dump();
     clwb(&(preds[0][0]->next[0]), 8);
     _mm_sfence();
-    for (int i = 1 ;i < height; i++) {
+    for (int i = 1; i < height; i++) {
       preds[region][i]->next[i] = node_paddr.dump();
     }
 #else
@@ -1374,8 +1388,9 @@ void ListDB::FlushMemTableToL1WAL(MemTableFlushTask* task, CompactionWorkerData*
     auto pool = Pmem::pool<pmem_log_root>(mem_value_pool_id);
     pmem::obj::persistent_ptr<char[]> p_buf;
     pmem::obj::make_persistent_atomic<char[]>(pool, p_buf, node_size);
-    Node* node = (PmemNode*) p_buf.get();
-    PmemPtr node_paddr = PmemPtr(mem_value_pool_id, ((uintptr_t) node - (uintptr_t) pool.handle()));
+    Node* node = (PmemNode*)p_buf.get();
+    PmemPtr node_paddr = PmemPtr(mem_value_pool_id,
+                                 ((uintptr_t)node - (uintptr_t)pool.handle()));
     node->tag = height;
     node->value = mem_node->value;
     _mm_sfence();
@@ -1386,7 +1401,7 @@ void ListDB::FlushMemTableToL1WAL(MemTableFlushTask* task, CompactionWorkerData*
     REPORT_FLUSH_OPS(1);
     flush_cnt++;
 
-    //std::this_thread::yield();
+    // std::this_thread::yield();
     mem_node = mem_node->next[0].load(MO_RELAXED);
   }
   REPORT_DONE;  // Up report all remainings
@@ -1394,13 +1409,14 @@ void ListDB::FlushMemTableToL1WAL(MemTableFlushTask* task, CompactionWorkerData*
   td->flush_cnt += flush_cnt;
   td->flush_time_usec += (end_micros - begin_micros);
 
-  task->imm->SetPersistentTable((Table*) l1_table);
+  task->imm->SetPersistentTable((Table*)l1_table);
   // TODO(wkim): Log this L0 table for recovery
-  //task->imm->FinalizeFlush();
+  // task->imm->FinalizeFlush();
   task->memtable_list->CleanUpFlushedImmutables();
 }
 
-void ListDB::FlushMemTableWAL(MemTableFlushTask* task, CompactionWorkerData* td) {
+void ListDB::FlushMemTableWAL(MemTableFlushTask* task,
+                              CompactionWorkerData* td) {
 #if LISTDB_FLUSH_MEMTABLE_TO_L1 == 1
   return FlushMemTableToL1WAL(task, td);
 #endif
@@ -1436,11 +1452,13 @@ void ListDB::FlushMemTableWAL(MemTableFlushTask* task, CompactionWorkerData* td)
   uint64_t begin_micros = Clock::NowMicros();
   INIT_REPORTER_CLIENT;
   while (mem_node) {
-    //std::this_thread::yield();
+    // std::this_thread::yield();
 #ifdef GROUP_LOGGING
-    while (((std::atomic<uint64_t>*) &mem_node->value)->load(std::memory_order_relaxed) == 0) continue;
+    while (((std::atomic<uint64_t>*)&mem_node->value)
+               ->load(std::memory_order_relaxed) == 0)
+      continue;
 #endif
-    int mem_value_pool_id = ((PmemPtr*) &mem_node->value)->pool_id();
+    int mem_value_pool_id = ((PmemPtr*)&mem_node->value)->pool_id();
     int region = pool_id_to_region_[mem_value_pool_id];
 
     auto rnd = Random::GetTLSInstance();
@@ -1459,13 +1477,14 @@ void ListDB::FlushMemTableWAL(MemTableFlushTask* task, CompactionWorkerData* td)
     }
 
     size_t node_size = sizeof(PmemNode) + (height - 1) * sizeof(uint64_t);
-    //auto node_paddr = l0_arena_[region][task->shard]->Allocate(node_size);
-    //Node* node = node_paddr.get<PmemNode>();
+    // auto node_paddr = l0_arena_[region][task->shard]->Allocate(node_size);
+    // Node* node = node_paddr.get<PmemNode>();
     auto pool = Pmem::pool<pmem_log_root>(mem_value_pool_id);
     pmem::obj::persistent_ptr<char[]> p_buf;
     pmem::obj::make_persistent_atomic<char[]>(pool, p_buf, node_size);
-    Node* node = (PmemNode*) p_buf.get();
-    PmemPtr node_paddr = PmemPtr(mem_value_pool_id, ((uintptr_t) node - (uintptr_t) pool.handle()));
+    Node* node = (PmemNode*)p_buf.get();
+    PmemPtr node_paddr = PmemPtr(mem_value_pool_id,
+                                 ((uintptr_t)node - (uintptr_t)pool.handle()));
 
     node->tag = height;
     node->value = mem_node->value;
@@ -1477,11 +1496,11 @@ void ListDB::FlushMemTableWAL(MemTableFlushTask* task, CompactionWorkerData* td)
     _mm_sfence();
     clwb(&pred->next[0], 8);
     for (int i = 1; i < height; i++) {
-      //std::this_thread::yield();
+      // std::this_thread::yield();
       preds[region][i]->next[i] = node_paddr.dump();
-      preds[region][i] = ((PmemPtr*) &(preds[region][i]->next[i]))->get<Node>();
+      preds[region][i] = ((PmemPtr*)&(preds[region][i]->next[i]))->get<Node>();
     }
-    pred = ((PmemPtr*) &(pred->next[0]))->get<Node>();
+    pred = ((PmemPtr*)&(pred->next[0]))->get<Node>();
 
 #if LISTDB_L0_CACHE == L0_CACHE_T_SIMPLE
     hash_table->Add(mem_node->key, mem_node->value);
@@ -1496,7 +1515,7 @@ void ListDB::FlushMemTableWAL(MemTableFlushTask* task, CompactionWorkerData* td)
     REPORT_FLUSH_OPS(1);
     flush_cnt++;
 
-    //std::this_thread::yield();
+    // std::this_thread::yield();
     mem_node = mem_node->next[0].load(MO_RELAXED);
   }
   REPORT_DONE;  // Up report all remainings
@@ -1506,9 +1525,9 @@ void ListDB::FlushMemTableWAL(MemTableFlushTask* task, CompactionWorkerData* td)
 
   PmemTable* l0_table = new PmemTable(kMemTableCapacity, l0_skiplist);
   l0_table->SetManifest(task->imm->l0_manifest());
-  task->imm->SetPersistentTable((Table*) l0_table);
+  task->imm->SetPersistentTable((Table*)l0_table);
   // TODO(wkim): Log this L0 table for recovery
-  //task->imm->FinalizeFlush();
+  // task->imm->FinalizeFlush();
   task->memtable_list->CleanUpFlushedImmutables();
 }
 
@@ -1519,13 +1538,14 @@ void ListDB::ManualFlushMemTable(int shard) {
   auto table = tl->GetFront();
   auto table2 = table->Next();
 
-  if (table->type() != TableType::kMemTable || (table2 != nullptr && table2->type() != TableType::kPmemTable)) {
+  if (table->type() != TableType::kMemTable ||
+      (table2 != nullptr && table2->type() != TableType::kPmemTable)) {
     fprintf(stdout, "ManualFlushMemTable failed\n");
     return;
   }
 
   tl->CreateNewFront();  // Level0Status is set to kFull.
-  
+
   // Flush (IUL)
   auto l0_skiplist = reinterpret_cast<MemTable*>(table)->l0_skiplist();
 
@@ -1551,18 +1571,20 @@ void ListDB::ManualFlushMemTable(int shard) {
   INIT_REPORTER_CLIENT;
   while (mem_node) {
 #ifdef GROUP_LOGGING
-    while (((std::atomic<uint64_t>*) &mem_node->value)->load(std::memory_order_relaxed) == 0) continue;
+    while (((std::atomic<uint64_t>*)&mem_node->value)
+               ->load(std::memory_order_relaxed) == 0)
+      continue;
 #endif
-    int pool_id = ((PmemPtr*) &mem_node->value)->pool_id();
+    int pool_id = ((PmemPtr*)&mem_node->value)->pool_id();
     int region = pool_id_to_region_[pool_id];
-    Node* node = ((PmemPtr*) &mem_node->value)->get<Node>();
+    Node* node = ((PmemPtr*)&mem_node->value)->get<Node>();
     int height = node->height();
     for (int i = 1; i < height; i++) {
       preds[region][i]->next[i] = mem_node->value;
-      preds[region][i] = ((PmemPtr*) &(preds[region][i]->next[i]))->get<Node>();
+      preds[region][i] = ((PmemPtr*)&(preds[region][i]->next[i]))->get<Node>();
     }
     pred->next[0] = mem_node->value;
-    pred = ((PmemPtr*) &(pred->next[0]))->get<Node>();
+    pred = ((PmemPtr*)&(pred->next[0]))->get<Node>();
 
 #if LISTDB_L0_CACHE == L0_CACHE_T_SIMPLE
     hash_table->Add(mem_node->key, mem_node->value);
@@ -1576,14 +1598,14 @@ void ListDB::ManualFlushMemTable(int shard) {
 
     REPORT_FLUSH_OPS(1);
 
-    //std::this_thread::yield();
+    // std::this_thread::yield();
     mem_node = mem_node->next[0].load(MO_RELAXED);
   }
   REPORT_DONE;  // Up report all remainings
 
   PmemTable* l0_table = new PmemTable(kMemTableCapacity, l0_skiplist);
   l0_table->SetManifest(reinterpret_cast<MemTable*>(table)->l0_manifest());
-  reinterpret_cast<MemTable*>(table)->SetPersistentTable((Table*) l0_table);
+  reinterpret_cast<MemTable*>(table)->SetPersistentTable((Table*)l0_table);
   // TODO(wkim): Log this L0 table for recovery
   tl->CleanUpFlushedImmutables();
 #else
@@ -1593,13 +1615,14 @@ void ListDB::ManualFlushMemTable(int shard) {
   auto table = tl->GetFront();
   auto table2 = table->Next();
 
-  if (table->type() != TableType::kMemTable || (table2 != nullptr && table2->type() != TableType::kPmemTable)) {
+  if (table->type() != TableType::kMemTable ||
+      (table2 != nullptr && table2->type() != TableType::kPmemTable)) {
     fprintf(stdout, "ManualFlushMemTable failed\n");
     return;
   }
 
   tl->NewFront();
-  
+
   // Flush (WAL)
   auto l0_skiplist = reinterpret_cast<MemTable*>(table)->l0_skiplist();
 
@@ -1625,9 +1648,11 @@ void ListDB::ManualFlushMemTable(int shard) {
   INIT_REPORTER_CLIENT;
   while (mem_node) {
 #ifdef GROUP_LOGGING
-    while (((std::atomic<uint64_t>*) &mem_node->value)->load(std::memory_order_relaxed) == 0) continue;
+    while (((std::atomic<uint64_t>*)&mem_node->value)
+               ->load(std::memory_order_relaxed) == 0)
+      continue;
 #endif
-    int mem_value_pool_id = ((PmemPtr*) &mem_node->value)->pool_id();
+    int mem_value_pool_id = ((PmemPtr*)&mem_node->value)->pool_id();
     int region = pool_id_to_region_[mem_value_pool_id];
 
     auto rnd = Random::GetTLSInstance();
@@ -1646,13 +1671,14 @@ void ListDB::ManualFlushMemTable(int shard) {
     }
 
     size_t node_size = sizeof(PmemNode) + (height - 1) * sizeof(uint64_t);
-    //auto node_paddr = l0_arena_[region][shard]->Allocate(node_size);
-    //Node* node = node_paddr.get<PmemNode>();
+    // auto node_paddr = l0_arena_[region][shard]->Allocate(node_size);
+    // Node* node = node_paddr.get<PmemNode>();
     auto pool = Pmem::pool<pmem_log_root>(mem_value_pool_id);
     pmem::obj::persistent_ptr<char[]> p_buf;
     pmem::obj::make_persistent_atomic<char[]>(pool, p_buf, node_size);
-    Node* node = (PmemNode*) p_buf.get();
-    PmemPtr node_paddr = PmemPtr(mem_value_pool_id, ((uintptr_t) node - (uintptr_t) pool.handle()));
+    Node* node = (PmemNode*)p_buf.get();
+    PmemPtr node_paddr = PmemPtr(mem_value_pool_id,
+                                 ((uintptr_t)node - (uintptr_t)pool.handle()));
 
     node->tag = height;
     node->value = mem_node->value;
@@ -1665,9 +1691,9 @@ void ListDB::ManualFlushMemTable(int shard) {
     clwb(&pred->next[0], 8);
     for (int i = 1; i < height; i++) {
       preds[region][i]->next[i] = node_paddr.dump();
-      preds[region][i] = ((PmemPtr*) &(preds[region][i]->next[i]))->get<Node>();
+      preds[region][i] = ((PmemPtr*)&(preds[region][i]->next[i]))->get<Node>();
     }
-    pred = ((PmemPtr*) &(pred->next[0]))->get<Node>();
+    pred = ((PmemPtr*)&(pred->next[0]))->get<Node>();
 
 #if LISTDB_L0_CACHE == L0_CACHE_T_SIMPLE
     hash_table->Add(mem_node->key, mem_node->value);
@@ -1681,20 +1707,21 @@ void ListDB::ManualFlushMemTable(int shard) {
 
     REPORT_FLUSH_OPS(1);
 
-    //std::this_thread::yield();
+    // std::this_thread::yield();
     mem_node = mem_node->next[0].load(MO_RELAXED);
   }
   REPORT_DONE;  // Up report all remainings
 
   PmemTable* l0_table = new PmemTable(kMemTableCapacity, l0_skiplist);
   l0_table->SetManifest(reinterpret_cast<MemTable*>(table)->l0_manifest());
-  reinterpret_cast<MemTable*>(table)->SetPersistentTable((Table*) l0_table);
+  reinterpret_cast<MemTable*>(table)->SetPersistentTable((Table*)l0_table);
   // TODO(wkim): Log this L0 table for recovery
   tl->CleanUpFlushedImmutables();
 #endif
 }
 
-void ListDB::ZipperCompactionL0(CompactionWorkerData* td, L0CompactionTask* task) {
+void ListDB::ZipperCompactionL0(CompactionWorkerData* td,
+                                L0CompactionTask* task) {
   auto l0_manifest = task->l0->manifest<pmem_l0_info>();
   l0_manifest->status = Level0Status::kMergeInitiated;
   // call clwb
@@ -1869,15 +1896,16 @@ void ListDB::ZipperCompactionL0(CompactionWorkerData* td, L0CompactionTask* task
     pmem::obj::make_persistent_atomic<pmem_l1_info>(db_pool, l1_manifest);
     auto db_root = db_pool.root();
     auto shard_manifest = db_root->shard[task->shard];
-    //l1_manifest->id = ??;
-    BraidedPmemSkipList* l1_skiplist = new BraidedPmemSkipList(l1_arena_[0][0]->pool_id());
+    // l1_manifest->id = ??;
+    BraidedPmemSkipList* l1_skiplist =
+        new BraidedPmemSkipList(l1_arena_[0][0]->pool_id());
     for (int i = 0; i < kNumRegions; i++) {
       l1_skiplist->BindArena(l1_pool_id_[i], l1_arena_[i][task->shard]);
     }
     l1_skiplist->Init();
     for (int i = 0; i < kNumRegions; i++) {
       auto p_head = l1_skiplist->p_head(l1_pool_id_[i]);
-      PmemNode* head = (PmemNode*) p_head.get();
+      PmemNode* head = (PmemNode*)p_head.get();
       PmemNode* l0_head = l0_skiplist->head(l0_pool_id_[i]);
       for (int h = 0; h < head->height(); h++) {
         head->next[h] = l0_head->next[h];
@@ -1885,14 +1913,15 @@ void ListDB::ZipperCompactionL0(CompactionWorkerData* td, L0CompactionTask* task
       l1_manifest->head[i] = p_head;
     }
     shard_manifest->l1_info = l1_manifest;
-    auto l1_table = new PmemTable(std::numeric_limits<size_t>::max(), l1_skiplist);
+    auto l1_table =
+        new PmemTable(std::numeric_limits<size_t>::max(), l1_skiplist);
 #endif
     l1_tl->SetFront(l1_table);
     auto table = task->memtable_list->GetFront();
     while (true) {
       auto next_table = table->Next();
       if (next_table) {
-        if (next_table == (Table*) task->l0) {
+        if (next_table == (Table*)task->l0) {
           table->SetNext(nullptr);
           break;
         }
@@ -1906,7 +1935,7 @@ void ListDB::ZipperCompactionL0(CompactionWorkerData* td, L0CompactionTask* task
     // call clwb
     return;
   }
-  auto l1_skiplist = ((PmemTable*) l1_tl->GetFront())->skiplist();
+  auto l1_skiplist = ((PmemTable*)l1_tl->GetFront())->skiplist();
 
   struct ZipperItem {
     PmemPtr node_paddr;
@@ -1975,8 +2004,8 @@ void ListDB::ZipperCompactionL0(CompactionWorkerData* td, L0CompactionTask* task
   }
 
   // 2. Merge
-  //bool print_debug = false;
-  //if (preds[0][0]->next[0] != 0) {
+  // bool print_debug = false;
+  // if (preds[0][0]->next[0] != 0) {
   //  print_debug = true;
   //}
   INIT_REPORTER_CLIENT;
@@ -1993,9 +2022,9 @@ void ListDB::ZipperCompactionL0(CompactionWorkerData* td, L0CompactionTask* task
       z->preds[0]->next[0] = z->node_paddr.dump();
       clwb(&z->preds[0]->next[0], 8);
       _mm_sfence();
-      //uint64_t tag = l0_node->tag;
-      //tag |= 0x100;
-      //l0_node->tag = tag;
+      // uint64_t tag = l0_node->tag;
+      // tag |= 0x100;
+      // l0_node->tag = tag;
     }
     for (int i = 1; i < l0_node->height(); i++) {
       l0_node->next[i] = z->preds[i]->next[i];
@@ -2004,14 +2033,15 @@ void ListDB::ZipperCompactionL0(CompactionWorkerData* td, L0CompactionTask* task
 #ifdef LISTDB_L1_LRU
     if (l0_node->height() >= kMaxHeight - (kNumCachedLevels - 1)) {
       int region = z->node_paddr.pool_id();
-      //sorted_arr_[region][task->shard].emplace_back(l0_node->key, z->node_paddr.dump());
-      //int lru_height = l0_node->height() - (kMaxHeight - kLruMaxHeight);
-      //lru_height = (lru_height + 1) / 2;
+      // sorted_arr_[region][task->shard].emplace_back(l0_node->key,
+      // z->node_paddr.dump()); int lru_height = l0_node->height() - (kMaxHeight
+      // - kLruMaxHeight); lru_height = (lru_height + 1) / 2;
       int lru_height = 1;
-      while (lru_height < kLruMaxHeight && td->rnd.Next() % 2== 0) {
+      while (lru_height < kLruMaxHeight && td->rnd.Next() % 2 == 0) {
         lru_height++;
       }
-      cache_[task->shard][region]->Insert(l0_node->key, z->node_paddr.dump(), lru_height);
+      cache_[task->shard][region]->Insert(l0_node->key, z->node_paddr.dump(),
+                                          lru_height);
     }
 #endif
 
@@ -2030,8 +2060,9 @@ void ListDB::ZipperCompactionL0(CompactionWorkerData* td, L0CompactionTask* task
 #ifdef LISTDB_L1_LRU
   using MyType1 = std::pair<uint64_t, uint64_t>;
   for (int i = 0; i < kNumRegions; i++) {
-    std::sort(sorted_arr_[i][task->shard].begin(), sorted_arr_[i][task->shard].end(),
-        [&](const MyType1 &a, const MyType1 &b) { return a.first > b.first; });
+    std::sort(
+        sorted_arr_[i][task->shard].begin(), sorted_arr_[i][task->shard].end(),
+        [&](const MyType1& a, const MyType1& b) { return a.first > b.first; });
   }
 #endif
 
@@ -2040,12 +2071,12 @@ void ListDB::ZipperCompactionL0(CompactionWorkerData* td, L0CompactionTask* task
   // call clwb
 
   // Remove empty L0 from MemTableList
-  //auto tl = ll_[task->shard]->GetTableList(0);
+  // auto tl = ll_[task->shard]->GetTableList(0);
   auto table = task->memtable_list->GetFront();
   while (true) {
     auto next_table = table->Next();
     if (next_table) {
-      if (next_table == (Table*) task->l0) {
+      if (next_table == (Table*)task->l0) {
         table->SetNext(nullptr);
         break;
       }
@@ -2064,13 +2095,14 @@ void ListDB::ZipperCompactionL0(CompactionWorkerData* td, L0CompactionTask* task
 
   auto l1_tl = ll_[task->shard]->GetTableList(1);
   if (l1_tl->IsEmpty()) {
-    auto l1_table = new PmemTable(std::numeric_limits<size_t>::max(), l0_skiplist);
+    auto l1_table =
+        new PmemTable(std::numeric_limits<size_t>::max(), l0_skiplist);
     l1_tl->SetFront(l1_table);
     auto table = task->memtable_list->GetFront();
     while (true) {
       auto next_table = table->Next();
       if (next_table) {
-        if (next_table == (Table*) task->l0) {
+        if (next_table == (Table*)task->l0) {
           table->SetNext(nullptr);
           break;
         }
@@ -2081,7 +2113,7 @@ void ListDB::ZipperCompactionL0(CompactionWorkerData* td, L0CompactionTask* task
     }
     return;
   }
-  auto l1_skiplist = ((PmemTable*) l1_tl->GetFront())->skiplist();
+  auto l1_skiplist = ((PmemTable*)l1_tl->GetFront())->skiplist();
 
   PmemPtr node_paddr = l0_skiplist->head_paddr();
 
@@ -2101,19 +2133,19 @@ void ListDB::ZipperCompactionL0(CompactionWorkerData* td, L0CompactionTask* task
   // 2. Merge
   while (!nstack.empty()) {
     auto& l0_paddr = nstack.top();
-    //auto l0_node = l0_paddr.get<Node>();
+    // auto l0_node = l0_paddr.get<Node>();
 
     l1_skiplist->Insert(l0_paddr);
 
     nstack.pop();
   }
   // Remove empty L0 from MemTableList
-  //auto tl = ll_[task->shard]->GetTableList(0);
+  // auto tl = ll_[task->shard]->GetTableList(0);
   auto table = task->memtable_list->GetFront();
   while (true) {
     auto next_table = table->Next();
     if (next_table) {
-      if (next_table == (Table*) task->l0) {
+      if (next_table == (Table*)task->l0) {
         table->SetNext(nullptr);
         break;
       }
@@ -2133,7 +2165,7 @@ void ListDB::L0CompactionCopyOnWrite(L0CompactionTask* task) {
   auto l0_skiplist = task->l0->skiplist();
 
   auto l1_tl = ll_[task->shard]->GetTableList(1);
-  auto l1_skiplist = ((PmemTable*) l1_tl->GetFront())->skiplist();
+  auto l1_skiplist = ((PmemTable*)l1_tl->GetFront())->skiplist();
 
   Node* preds[kNumRegions][kMaxHeight];
   uint64_t succs[kNumRegions][kMaxHeight];
@@ -2202,23 +2234,23 @@ void ListDB::L0CompactionCopyOnWrite(L0CompactionTask* task) {
     clwb(l1_node, node_size);
     _mm_sfence();
     preds[0][0]->next[0] = l1_node_paddr.dump();
-    for (int i = 1 ;i < height; i++) {
+    for (int i = 1; i < height; i++) {
       preds[region][i]->next[i] = l1_node_paddr.dump();
     }
 
     REPORT_COMPACTION_OPS(1);
-    
+
     node_paddr = l0_node->next[0];
   }
   REPORT_DONE;  // Up report all remainings
 
   // Remove empty L0 from MemTableList
-  //auto tl = ll_[task->shard]->GetTableList(0);
+  // auto tl = ll_[task->shard]->GetTableList(0);
   auto table = task->memtable_list->GetFront();
   while (true) {
     auto next_table = table->Next();
     if (next_table) {
-      if (next_table == (Table*) task->l0) {
+      if (next_table == (Table*)task->l0) {
         table->SetNext(nullptr);
         break;
       }
@@ -2250,7 +2282,7 @@ int ListDB::GetStatString(const std::string& name, std::string* buf) {
   int rv = 0;
   std::stringstream ss;
   if (name == "l1_cache_size") {
-  #ifdef LISTDB_SKIPLIST_CACHE
+#ifdef LISTDB_SKIPLIST_CACHE
     size_t sum = 0;
     size_t max = 0;
     for (int i = 0; i < kNumShards; i++) {
@@ -2262,12 +2294,14 @@ int ListDB::GetStatString(const std::string& name, std::string* buf) {
       sum += shard_size;
     }
     ss << name << ": " << sum << " (per shard max: " << max << ")";
-  #else
+#else
     rv = 1;
-  #endif
+#endif
   } else if (name == "flush_stats") {
     for (int i = 0; i < kNumWorkers; i++) {
-      ss << "worker " << i << ": flush_cnt = " << worker_data_[i].flush_cnt << " flush_time_usec = " << worker_data_[i].flush_time_usec << std::endl;
+      ss << "worker " << i << ": flush_cnt = " << worker_data_[i].flush_cnt
+         << " flush_time_usec = " << worker_data_[i].flush_time_usec
+         << std::endl;
     }
   } else {
     ss << "Unknown name: " << name;
