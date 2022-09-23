@@ -11,3 +11,4 @@ bak/
 log-*
 *.patch
 *.vscode
+*.DS_Store
