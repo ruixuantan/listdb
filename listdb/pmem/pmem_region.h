@@ -27,6 +27,12 @@ class PmemRegion {
 
   void CreateLogPool();
 
+  void InitSkiplistPool();
+
+  PmemLog* GetL0PmemLog(const int region, const int shard);
+
+  PmemLog* GetL1PmemLog(const int region, const int shard);
+
   void Clear();
 
  private:
@@ -41,7 +47,6 @@ class PmemRegion {
   PmemLog* log_[kNumRegions][kNumShards];
   PmemLog* l0_arena_[kNumRegions][kNumShards];
   PmemLog* l1_arena_[kNumRegions][kNumShards];
-  LevelList* ll_[kNumShards];
 
   int InitPath(std::string path);
 };
@@ -81,6 +86,33 @@ void PmemRegion::CreateLogPool() {
       log_[i][j] = new PmemLog(pool_id, j, pmem_);
     }
   }
+}
+
+void PmemRegion::InitSkiplistPool() {
+  for (int i = 0; i < kNumRegions; ++i) {
+    l0_pool_id_[i] = log_pool_id_[i];
+    for (int j = 0; j < kNumShards; ++j) {
+      l0_arena_[i][j] = log_[i][j];
+    }
+  }
+
+  for (int i = 0; i < kNumRegions; ++i) {
+    for (int j = 0; j < kNumShards; ++j) {
+      l1_arena_[i][j] = l0_arena_[i][j];
+    }
+  }
+
+  for (int i = 0; i < kNumRegions; ++i) {
+    l1_pool_id_[i] = l1_arena_[i][0]->pool_id();
+  }
+}
+
+PmemLog* PmemRegion::GetL0PmemLog(const int region, const int shard) {
+  return l0_arena_[region][shard];
+}
+
+PmemLog* PmemRegion::GetL1PmemLog(const int region, const int shard) {
+  return l1_arena_[region][shard];
 }
 
 int PmemRegion::InitPath(std::string path) {
