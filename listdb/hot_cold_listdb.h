@@ -30,7 +30,7 @@
 #include "listdb/lsm/pmemtable.h"
 #include "listdb/lsm/pmemtable_list.h"
 #include "listdb/pmem/pmem_dir.h"
-#include "listdb/pmem/pmem_mgr.h"
+#include "listdb/pmem/pmem_section.h"
 #include "listdb/util/clock.h"
 #include "listdb/util/random.h"
 #include "listdb/util/reporter.h"
@@ -75,10 +75,10 @@ class HotColdListDB {
   void Close();
 
  private:
-  PmemMgr pmem_mgr_;
+  PmemSection pmem_mgr_;
 };
 
-HotColdListDB::HotColdListDB() : pmem_mgr_{PmemMgr()} {}
+HotColdListDB::HotColdListDB() : pmem_mgr_{PmemSection()} {}
 
 HotColdListDB::~HotColdListDB() {
   fprintf(stdout, "HotColdListDB closed\n");
