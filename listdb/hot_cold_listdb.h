@@ -75,18 +75,27 @@ class HotColdListDB {
   void Close();
 
  private:
-  PmemSection pmem_mgr_;
+  PmemSection pmem0_;
+  PmemSection pmem1_;
 };
 
-HotColdListDB::HotColdListDB() : pmem_mgr_{PmemSection()} {}
+HotColdListDB::HotColdListDB() : pmem0_{PmemSection()}, pmem1_{PmemSection()} {}
 
 HotColdListDB::~HotColdListDB() {
   fprintf(stdout, "HotColdListDB closed\n");
   Close();
 }
 
-void HotColdListDB::Init() { pmem_mgr_.Init(); }
+void HotColdListDB::Init() {
+  pmem0_.Init();
+  pmem1_.Init();
+}
 
-void HotColdListDB::Close() { pmem_mgr_.Clear(); }
+void HotColdListDB::Open() {}
+
+void HotColdListDB::Close() {
+  pmem0_.Clear();
+  pmem1_.Clear();
+}
 
 #endif  // HOT_COLD_LISTDB_LISTDB_H_
