@@ -16,6 +16,8 @@ class PmemSection {
 
   void Init();
 
+  void Open();
+
   void Clear();
 
  private:
@@ -58,6 +60,11 @@ void PmemSection::Init() {
   cold_region_.InitSkiplistPool();
   InitTableLists();
   StartThreads();
+}
+
+void PmemSection::Open() {
+  hot_region_.InitRootPool();
+  cold_region_.InitRootPool();
 }
 
 void PmemSection::InitTableLists() {

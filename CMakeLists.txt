@@ -109,6 +109,7 @@ set(test_srcs
   listdb/pmem/pmem_test.cc
   listdb/lib/numa_test.cc
   listdb/db_client_test.cc
+  listdb/hot_cold_test.cc
   listdb/index/braided_pmem_skiplist_test.cc
   listdb/core/skiplist_cache_test.cc
   )
@@ -207,7 +208,7 @@ endforeach()
 #endforeach()
 
 ###
-## YCSB 
+## YCSB
 #function(ycsb_benchmark ycsb_test_file)
 #	# get_filename_component(ycsb_test_target_name "${ycsb_test_file}" NAME_WE)
 #	get_filename_component(ycsb_test_target_name "ycsb" NAME_WE)

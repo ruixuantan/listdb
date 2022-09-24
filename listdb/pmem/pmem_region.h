@@ -11,17 +11,18 @@
 #include "listdb/pmem/pmem_dir.h"
 
 namespace fs = std::experimental::filesystem::v1;
+using PmemDbPool = pmem::obj::pool<pmem_db>;
+using PmemDbPtr = pmem::obj::persistent_ptr<pmem_db>;
 
 /*
  * Manages the folder structure and pool ids of a
  * listdb region. A listdb region is either hot or cold.
  */
 class PmemRegion {
-  using PmemDbPool = pmem::obj::pool<pmem_db>;
-  using PmemDbPtr = pmem::obj::persistent_ptr<pmem_db>;
-
  public:
   PmemRegion(std::string_view suffix);
+
+  PmemDbPool InitRootPool();
 
   void CreateRootPool();
 
@@ -54,9 +55,7 @@ class PmemRegion {
 PmemRegion::PmemRegion(std::string_view suffix) : suffix_{suffix} {}
 
 void PmemRegion::CreateRootPool() {
-  std::string db_path = PmemDir::db_path(suffix_);
-  int root_pool_id = PmemRegion::InitPath(db_path);
-  PmemDbPool db_pool = pmem_.pool<pmem_db>(root_pool_id);
+  PmemDbPool db_pool = InitRootPool();
   PmemDbPtr db_root = db_pool.root();
 
   for (int i = 0; i < kNumShards; ++i) {
@@ -67,6 +66,12 @@ void PmemRegion::CreateRootPool() {
     p_shard_manifest->l0_list_head = p_l0_manifest;
     db_root->shard[i] = p_shard_manifest;
   }
+}
+
+PmemDbPool PmemRegion::InitRootPool() {
+  std::string db_path = PmemDir::db_path(suffix_);
+  int root_pool_id = PmemRegion::InitPath(db_path);
+  return pmem_.pool<pmem_db>(root_pool_id);
 }
 
 void PmemRegion::CreateLogPool() {
