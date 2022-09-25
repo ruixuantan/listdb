@@ -72,13 +72,29 @@ class HotColdListDB {
 
   void Open();
 
+  void Put(const Key& key, const Value& value);
+
   void Close();
 
  private:
+  int DramRandomHeight();
+
+  int PmemRandomHeight();
+
+  static int KeyShard(const Key& key);
+
+  MemTable* GetWritableMemTable(size_t kv_size, int shard);
+
+  MemTable* GetMemTable(int shard);
+
   std::array<PmemSection, kNumSections> pmems_;
+  Random rnd_;
+
+  LevelList* ll_[kNumShards];
 };
 
-HotColdListDB::HotColdListDB() : pmems_{{PmemSection(0), PmemSection(1)}} {}
+HotColdListDB::HotColdListDB()
+    : pmems_{{PmemSection(0), PmemSection(1)}}, rnd_{Random(0)} {}
 
 HotColdListDB::~HotColdListDB() {
   fprintf(stdout, "HotColdListDB closed\n");
@@ -87,7 +103,7 @@ HotColdListDB::~HotColdListDB() {
 
 void HotColdListDB::Init() {
   for (auto& pmem : pmems_) {
-    pmem.Init();
+    pmem.Init(ll_);
   }
 }
 
@@ -97,6 +113,61 @@ void HotColdListDB::Close() {
   for (auto& pmem : pmems_) {
     pmem.Clear();
   }
+}
+
+void HotColdListDB::Put(const Key& key, const Value& value) {
+  int shard = KeyShard(key);
+
+  uint64_t pmem_height = PmemRandomHeight();
+  size_t iul_entry_size =
+      sizeof(PmemNode) + (pmem_height - 1) * sizeof(uint64_t);
+  size_t kv_size = key.size() + sizeof(Value);
+
+  // Determind l0 id
+  MemTable* mem = GetWritableMemTable(kv_size, shard);
+  uint64_t l0_id = mem->l0_id();
+
+  // Write log
+  // PmemPtr log_paddr = log_[shard]->Allocate(iul_entry_size);
+  // PmemNode* iul_entry = static_cast<PmemNode*>(log_paddr.get());
+}
+
+inline int HotColdListDB::DramRandomHeight() {
+  static const unsigned int kBranching = 4;
+  int height = 1;
+  while (height < kMaxHeight && ((rnd_.Next() % kBranching) == 0)) {
+    height++;
+  }
+  return height;
+}
+
+inline int HotColdListDB::PmemRandomHeight() {
+  static const unsigned int kBranching = 4;
+  int height = 1;
+  if (rnd_.Next() % std::max<int>(1, (kBranching / kNumRegions)) == 0) {
+    height++;
+    while (height < kMaxHeight && ((rnd_.Next() % kBranching) == 0)) {
+      height++;
+    }
+  }
+  return height;
+}
+
+inline int HotColdListDB::KeyShard(const Key& key) {
+  return key.key_num() % kNumShards;
+}
+
+// Any table this function returns must be unreferenced manually
+inline MemTable* HotColdListDB::GetWritableMemTable(size_t kv_size, int shard) {
+  TableList* tl = ll_[shard]->GetTableList(0);
+  Table* mem = tl->GetMutable(kv_size);
+  return static_cast<MemTable*>(mem);
+}
+
+inline MemTable* HotColdListDB::GetMemTable(int shard) {
+  TableList* tl = ll_[shard]->GetTableList(0);
+  Table* mem = tl->GetFront();
+  return static_cast<MemTable*>(mem);
 }
 
 #endif  // HOT_COLD_LISTDB_LISTDB_H_

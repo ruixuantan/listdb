@@ -16,7 +16,11 @@ class HotColdDBClient {
   using MemNode = ListDB::MemNode;
   using PmemNode = ListDB::PmemNode;
 
-  HotColdDBClient(ListDB *db, int id, int region);
+  HotColdDBClient(ListDB* db, int id, int region);
+
+  void Put(const Key& key, const Value& value);
+
+ private:
 };
 
 #endif  // HOT_COLD_LISTDB_DB_CLIENT_H_

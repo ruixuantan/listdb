@@ -34,6 +34,10 @@ class PmemRegion {
 
   PmemLog* GetL1PmemLog(const int region, const int shard);
 
+  PmemLog* log(const int region, const int shard) {
+    return log_[region][shard];
+  }
+
   void Clear();
 
  private:
