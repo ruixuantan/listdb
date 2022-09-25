@@ -31,6 +31,7 @@
 #include "listdb/lsm/pmemtable_list.h"
 #include "listdb/pmem/pmem_dir.h"
 #include "listdb/pmem/pmem_section.h"
+#include "listdb/separator/separator.h"
 #include "listdb/util/clock.h"
 #include "listdb/util/random.h"
 #include "listdb/util/reporter.h"
@@ -89,12 +90,15 @@ class HotColdListDB {
 
   std::array<PmemSection, kNumSections> pmems_;
   Random rnd_;
+  Separator* separator_;
 
   LevelList* ll_[kNumShards];
 };
 
 HotColdListDB::HotColdListDB()
-    : pmems_{{PmemSection(0), PmemSection(1)}}, rnd_{Random(0)} {}
+    : pmems_{{PmemSection(0), PmemSection(1)}},
+      rnd_{Random(0)},
+      separator_{new MockSeparator()} {}
 
 HotColdListDB::~HotColdListDB() {
   fprintf(stdout, "HotColdListDB closed\n");
@@ -127,6 +131,7 @@ void HotColdListDB::Put(const Key& key, const Value& value) {
   MemTable* mem = GetWritableMemTable(kv_size, shard);
   uint64_t l0_id = mem->l0_id();
 
+  Temperature temp = separator_->separate(key);
   // Write log
   // PmemPtr log_paddr = log_[shard]->Allocate(iul_entry_size);
   // PmemNode* iul_entry = static_cast<PmemNode*>(log_paddr.get());

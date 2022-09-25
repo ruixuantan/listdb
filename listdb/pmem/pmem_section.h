@@ -153,7 +153,7 @@ PmemLog* PmemSection::hot_log(const int region, const int shard) {
   return hot_region_.log(region, shard);
 }
 
-PmemLog* PmemSection::hot_log(const int region, const int shard) {
+PmemLog* PmemSection::cold_log(const int region, const int shard) {
   return cold_region_.log(region, shard);
 }
 
