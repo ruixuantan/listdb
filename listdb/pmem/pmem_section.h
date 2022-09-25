@@ -6,13 +6,15 @@
 #include "listdb/pmem/pmem_dir.h"
 #include "listdb/pmem/pmem_region.h"
 
+namespace fs = std::experimental::filesystem::v1;
+
 /*
  * Interface for managing a section of the NVM.
  * A section refers to 1 hot + 1 cold region.
  */
 class PmemSection {
  public:
-  PmemSection();
+  PmemSection(int sect_id);
 
   void Init();
 
@@ -21,6 +23,7 @@ class PmemSection {
   void Clear();
 
  private:
+  int sect_id_;
   PmemRegion hot_region_;
   PmemRegion cold_region_;
 
@@ -47,11 +50,15 @@ class PmemSection {
   void CompactionWorkerThreadLoop(CompactionWorkerData* td);
 };
 
-PmemSection::PmemSection()
-    : hot_region_{PmemRegion(PmemDir::kHotSuffix)},
-      cold_region_{PmemRegion(PmemDir::kColdSuffix)} {}
+PmemSection::PmemSection(int sect_id)
+    : sect_id_{sect_id},
+      hot_region_{PmemRegion(sect_id, PmemDir::kHotSuffix)},
+      cold_region_{PmemRegion(sect_id, PmemDir::kColdSuffix)} {}
 
 void PmemSection::Init() {
+  std::string section_path = PmemDir::section_path(sect_id_);
+  fs::remove_all(section_path);
+  fs::create_directories(section_path);
   hot_region_.CreateRootPool();
   cold_region_.CreateRootPool();
   hot_region_.CreateLogPool();

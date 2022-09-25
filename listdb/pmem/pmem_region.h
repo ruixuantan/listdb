@@ -20,7 +20,7 @@ using PmemDbPtr = pmem::obj::persistent_ptr<pmem_db>;
  */
 class PmemRegion {
  public:
-  PmemRegion(std::string_view suffix);
+  PmemRegion(int sect_id, std::string_view suffix);
 
   PmemDbPool InitRootPool();
 
@@ -37,6 +37,7 @@ class PmemRegion {
   void Clear();
 
  private:
+  int sect_id_;
   std::string_view suffix_;
   HCPmem pmem_;
 
@@ -52,7 +53,8 @@ class PmemRegion {
   int InitPath(std::string path);
 };
 
-PmemRegion::PmemRegion(std::string_view suffix) : suffix_{suffix} {}
+PmemRegion::PmemRegion(int sect_id, std::string_view suffix)
+    : sect_id_{sect_id}, suffix_{suffix} {}
 
 void PmemRegion::CreateRootPool() {
   PmemDbPool db_pool = InitRootPool();
@@ -69,17 +71,17 @@ void PmemRegion::CreateRootPool() {
 }
 
 PmemDbPool PmemRegion::InitRootPool() {
-  std::string db_path = PmemDir::db_path(suffix_);
+  std::string db_path = PmemDir::db_path(sect_id_, suffix_);
   int root_pool_id = PmemRegion::InitPath(db_path);
   return pmem_.pool<pmem_db>(root_pool_id);
 }
 
 void PmemRegion::CreateLogPool() {
   for (int i = 0; i < kNumRegions; ++i) {
-    std::string log_path = PmemDir::region_log_path(i, suffix_);
+    std::string log_path = PmemDir::region_log_path(sect_id_, i, suffix_);
     fs::remove_all(log_path);
     fs::create_directories(log_path);
-    std::string poolset = PmemDir::region_log_poolset(i, suffix_);
+    std::string poolset = PmemDir::region_log_poolset(sect_id_, i, suffix_);
     PmemDir::write_poolset_config(log_path, poolset);
 
     int pool_id = pmem_.BindPoolSet<pmem_log_root>(poolset, "");

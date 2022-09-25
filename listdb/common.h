@@ -37,7 +37,8 @@ constexpr size_t kStringKeyLength = 16;
 
 constexpr int kNumRegions = 4;
 constexpr int kNumShards = 256;
-constexpr std::string_view kPathPrefix = "/optane/ruixuan/ldb";
+constexpr int kNumSections = 2;
+constexpr std::string_view kPathPrefix = "/optane/ruixuan/ldb/";
 #ifdef LISTDB_RANGE_SHARD
 constexpr uint64_t kShardSize =
     std::numeric_limits<uint64_t>::max() / kNumShards + (kNumShards > 1);
