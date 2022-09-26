@@ -5,6 +5,7 @@
 #include <mutex>
 
 #include "listdb/common.h"
+#include "listdb/lsm/memtable.h"
 #include "listdb/lsm/table.h"
 //#include "listdb/lsm/table_v2.h"
 
@@ -24,10 +25,17 @@ class TableList {
 
   Table* GetFront();
 
+  Table* GetFront(PmemAllocator* allocator);
+
   Table* GetMutable(const size_t size);
+
+  Table* GetMutable(const size_t size, PmemAllocator* allocator);
 
  protected:
   virtual Table* NewMutable(size_t table_capacity, Table* next_table) = 0;
+
+  virtual Table* NewMutable(size_t table_capacity, Table* next_table,
+                            PmemAllocator* allocator) = 0;
 
   virtual void EnqueueCompaction(Table* table) { return; };
 
@@ -36,7 +44,8 @@ class TableList {
   std::atomic<Table*> front_;
 };
 
-TableList::TableList(const size_t table_capacity) : table_capacity_(table_capacity), front_(nullptr) { }
+TableList::TableList(const size_t table_capacity)
+    : table_capacity_(table_capacity), front_(nullptr) {}
 
 void* TableList::Put(const Key& key, const Value& value) {
   const size_t kv_size = key.size() + 8;
@@ -87,6 +96,19 @@ Table* TableList::GetFront() {
   return ret;
 }
 
+Table* TableList::GetFront(PmemAllocator* allocator) {
+  Table* ret = front_.load(MO_RELAXED);
+  if (ret == nullptr) {
+    std::lock_guard<std::mutex> lk(init_mu_);
+    ret = front_.load(MO_RELAXED);
+    if (ret == nullptr) {
+      ret = NewMutable(table_capacity_, nullptr, allocator);
+      front_.store(ret, MO_RELAXED);
+    }
+  }
+  return ret;
+}
+
 Table* TableList::GetMutable(const size_t size) {
   auto table = GetFront();
   table->w_Ref(MO_RELAXED);
@@ -111,10 +133,34 @@ Table* TableList::GetMutable(const size_t size) {
   return table;
 }
 
+Table* TableList::GetMutable(const size_t size, PmemAllocator* allocator) {
+  auto table = GetFront(allocator);
+  table->w_Ref(MO_RELAXED);
+  if (!table->HasRoom(size)) {
+    table->w_UnRef(MO_RELAXED);
+    // >>> IMPLICIT MFENCE
+    std::unique_lock<std::mutex> lk(init_mu_);
+    table = front_.load(MO_RELAXED);
+    table->w_Ref(MO_RELAXED);
+    if (!table->HasRoom(size)) {
+      table->w_UnRef(MO_RELAXED);
+      auto new_table = NewMutable(table_capacity_, table, allocator);
+      new_table->HasRoom(size);
+      new_table->w_Ref(MO_RELAXED);
+      front_.store(new_table, MO_RELAXED);
+      lk.unlock();
+      EnqueueCompaction(table);
+      table = new_table;
+    }
+    // <<< MFENCE
+  }
+  return table;
+}
+
 #if 0
 template <class T>
 class TableList {
- public:  
+ public:
   TableList(const size_t table_capacity);
   void* Put(const Key& key, const Value& value);
   bool Get(const Key&);
@@ -210,7 +256,7 @@ T* TableList<T>::GetMutable(const size_t size) {
 
 #if 0
 class TableListV2 {
- public:  
+ public:
   using T = TableV2;
 
   TableListV2(const size_t table_capacity);

@@ -63,7 +63,7 @@ class PmemLog {
 
   PmemLog(const int pool_id, const int shard_id);
 
-  PmemLog(const int pool_id, const int shard_id, HCPmem& pmem);
+  PmemLog(const int pool_id, const int shard_id, PmemAllocator& pmem);
 
   ~PmemLog();
 
@@ -129,7 +129,7 @@ PmemLog::PmemLog(const int pool_id, const int shard_id) : pool_id_(pool_id) {
   }
 }
 
-PmemLog::PmemLog(const int pool_id, const int shard_id, HCPmem& pmem)
+PmemLog::PmemLog(const int pool_id, const int shard_id, PmemAllocator& pmem)
     : pool_id_(pool_id) {
   auto pool = pmem.pool<pmem_log_root>(pool_id_);
   pool_ = pool;

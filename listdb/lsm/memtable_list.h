@@ -4,8 +4,8 @@
 #include <condition_variable>
 #include <functional>
 
-#include "listdb/lsm/table_list.h"
 #include "listdb/lsm/memtable.h"
+#include "listdb/lsm/table_list.h"
 
 class MemTableList : public TableList {
  public:
@@ -22,6 +22,9 @@ class MemTableList : public TableList {
  protected:
   virtual Table* NewMutable(size_t table_capacity, Table* next_table) override;
 
+  virtual Table* NewMutable(size_t table_capacity, Table* next_table,
+                            PmemAllocator* allocator) override;
+
   virtual void EnqueueCompaction(Table* table) override;
 
   const int shard_id_;
@@ -36,9 +39,10 @@ class MemTableList : public TableList {
 };
 
 MemTableList::MemTableList(const size_t table_capacity, const int shard_id)
-    : TableList(table_capacity), shard_id_(shard_id) { }
+    : TableList(table_capacity), shard_id_(shard_id) {}
 
-void MemTableList::BindEnqueueFunction(std::function<void(MemTable*)> enqueue_fn) {
+void MemTableList::BindEnqueueFunction(
+    std::function<void(MemTable*)> enqueue_fn) {
   enqueue_fn_ = enqueue_fn;
 }
 
@@ -46,9 +50,10 @@ void MemTableList::BindArena(int region, PmemLog* arena) {
   arena_[region] = arena;
 }
 
-inline Table* MemTableList::NewMutable(size_t table_capacity, Table* next_table) {
+inline Table* MemTableList::NewMutable(size_t table_capacity,
+                                       Table* next_table) {
   std::unique_lock<std::mutex> lk(mu_);
-  cv_.wait(lk, [&]{
+  cv_.wait(lk, [&] {
     if (num_memtables_ < max_num_memtables_) {
       return true;
     } else {
@@ -58,11 +63,12 @@ inline Table* MemTableList::NewMutable(size_t table_capacity, Table* next_table)
   });
   num_memtables_++;
   lk.unlock();
-  MemTable* new_table = new MemTable(table_capacity);  // TODO(wkim): a table must have an ID
+  MemTable* new_table =
+      new MemTable(table_capacity);  // TODO(wkim): a table must have an ID
 
   // Set the next table as full
   if (next_table) {
-    auto next_memtable = (MemTable*) next_table;
+    auto next_memtable = (MemTable*)next_table;
     auto next_l0_manifest = next_memtable->l0_manifest();
     next_l0_manifest->status = Level0Status::kFull;
     // call clwb
@@ -76,7 +82,58 @@ inline Table* MemTableList::NewMutable(size_t table_capacity, Table* next_table)
   auto shard_manifest = db_root->shard[shard_id_];
   l0_manifest->id = shard_manifest->l0_cnt++;
   l0_manifest->status = Level0Status::kInitialized;
-  BraidedPmemSkipList* l0_skiplist = new BraidedPmemSkipList(arena_[0]->pool_id());
+  BraidedPmemSkipList* l0_skiplist =
+      new BraidedPmemSkipList(arena_[0]->pool_id());
+  for (int i = 0; i < kNumRegions; i++) {
+    l0_skiplist->BindArena(arena_[i]->pool_id(), arena_[i]);
+  }
+  l0_skiplist->Init();
+  for (int i = 0; i < kNumRegions; i++) {
+    int pool_id = arena_[i]->pool_id();
+    l0_manifest->head[i] = l0_skiplist->p_head(pool_id);
+  }
+  l0_manifest->next = shard_manifest->l0_list_head->next;
+  shard_manifest->l0_list_head->next = l0_manifest;
+  new_table->SetL0SkipList(l0_skiplist);
+  new_table->SetL0Manifest(l0_manifest);
+  new_table->SetNext(next_table);
+  return new_table;
+}
+
+inline Table* MemTableList::NewMutable(size_t table_capacity, Table* next_table,
+                                       PmemAllocator* allocator) {
+  std::unique_lock<std::mutex> lk(mu_);
+  cv_.wait(lk, [&] {
+    if (num_memtables_ < max_num_memtables_) {
+      return true;
+    } else {
+      fprintf(stdout, "Stall\n");
+      return false;
+    }
+  });
+  num_memtables_++;
+  lk.unlock();
+  MemTable* new_table =
+      new MemTable(table_capacity);  // TODO(wkim): a table must have an ID
+
+  // Set the next table as full
+  if (next_table) {
+    auto next_memtable = (MemTable*)next_table;
+    auto next_l0_manifest = next_memtable->l0_manifest();
+    next_l0_manifest->status = Level0Status::kFull;
+    // call clwb
+  }
+
+  // Init the new manifest for a new table
+  pmem::obj::persistent_ptr<pmem_l0_info> l0_manifest;
+  auto db_pool = allocator->pool<pmem_db>(0);
+  pmem::obj::make_persistent_atomic<pmem_l0_info>(db_pool, l0_manifest);
+  auto db_root = db_pool.root();
+  auto shard_manifest = db_root->shard[shard_id_];
+  l0_manifest->id = shard_manifest->l0_cnt++;
+  l0_manifest->status = Level0Status::kInitialized;
+  BraidedPmemSkipList* l0_skiplist =
+      new BraidedPmemSkipList(arena_[0]->pool_id());
   for (int i = 0; i < kNumRegions; i++) {
     l0_skiplist->BindArena(arena_[i]->pool_id(), arena_[i]);
   }
@@ -94,8 +151,8 @@ inline Table* MemTableList::NewMutable(size_t table_capacity, Table* next_table)
 }
 
 inline void MemTableList::EnqueueCompaction(Table* table) {
-  //fprintf(stdout, "Enqueue\n");
-  enqueue_fn_((MemTable*) table);
+  // fprintf(stdout, "Enqueue\n");
+  enqueue_fn_((MemTable*)table);
 }
 
 void MemTableList::CleanUpFlushedImmutables() {
@@ -112,20 +169,20 @@ void MemTableList::CleanUpFlushedImmutables() {
   }
   int flushed_cnt = 0;
 
-  //std::vector<Table*> pmemtables;
+  // std::vector<Table*> pmemtables;
   MemTable* pred = nullptr;
   for (int i = tables.size() - 1; i >= 1; i--) {
     if (tables[i]->type() == TableType::kMemTable) {
-      MemTable* imm = (MemTable*) tables[i];
+      MemTable* imm = (MemTable*)tables[i];
       if (imm->IsFlushed()) {
-        //pmemtables.push_back((Table*) imm->PersistentTable());
-        auto pmem = (Table*) imm->PersistentTable();
+        // pmemtables.push_back((Table*) imm->PersistentTable());
+        auto pmem = (Table*)imm->PersistentTable();
         if (imm->Next()) {
           if (imm->Next()->type() == TableType::kPmemTable) {
             pmem->SetNext(imm->Next());
           }
         }
-        pred = (MemTable*) tables[i - 1];
+        pred = (MemTable*)tables[i - 1];
         pred->SetNext(pmem);
 
         flushed_cnt++;
@@ -136,12 +193,12 @@ void MemTableList::CleanUpFlushedImmutables() {
     }
   }
 
-  //for (int i = 0; i < pmemtables.size() - 1; i++) {
-  //  pmemtables[i + 1]->SetNext(pmemtables[i]);
-  //}
-  //if (pred) {
-  //  pred->SetNext(pmemtables.back());
-  //}
+  // for (int i = 0; i < pmemtables.size() - 1; i++) {
+  //   pmemtables[i + 1]->SetNext(pmemtables[i]);
+  // }
+  // if (pred) {
+  //   pred->SetNext(pmemtables.back());
+  // }
 
   std::unique_lock<std::mutex> lk(mu_);
   num_memtables_ -= flushed_cnt;

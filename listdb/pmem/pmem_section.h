@@ -5,6 +5,7 @@
 #include "listdb/lsm/level_list.h"
 #include "listdb/pmem/pmem_dir.h"
 #include "listdb/pmem/pmem_region.h"
+#include "listdb/tasks/Task.h"
 
 namespace fs = std::experimental::filesystem::v1;
 
@@ -23,7 +24,12 @@ class PmemSection {
   void Clear();
 
   PmemLog* hot_log(const int region, const int shard);
+
   PmemLog* cold_log(const int region, const int shard);
+
+  PmemAllocator* hot_allocator() { return hot_region_.allocator(); };
+
+  PmemAllocator* cold_allocator() { return cold_region_.allocator(); };
 
  private:
   int sect_id_;

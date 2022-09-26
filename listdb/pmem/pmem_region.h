@@ -38,12 +38,14 @@ class PmemRegion {
     return log_[region][shard];
   }
 
+  PmemAllocator* allocator() { return &allocator_; }
+
   void Clear();
 
  private:
   int sect_id_;
   std::string_view suffix_;
-  HCPmem pmem_;
+  PmemAllocator allocator_;
 
   std::unordered_map<int, int> pool_id_to_region_;
   std::unordered_map<int, int> log_pool_id_;
@@ -77,7 +79,7 @@ void PmemRegion::CreateRootPool() {
 PmemDbPool PmemRegion::InitRootPool() {
   std::string db_path = PmemDir::db_path(sect_id_, suffix_);
   int root_pool_id = PmemRegion::InitPath(db_path);
-  return pmem_.pool<pmem_db>(root_pool_id);
+  return allocator_.pool<pmem_db>(root_pool_id);
 }
 
 void PmemRegion::CreateLogPool() {
@@ -88,13 +90,14 @@ void PmemRegion::CreateLogPool() {
     std::string poolset = PmemDir::region_log_poolset(sect_id_, i, suffix_);
     PmemDir::write_poolset_config(log_path, poolset);
 
-    int pool_id = pmem_.BindPoolSet<pmem_log_root>(poolset, "");
+    int pool_id = allocator_.BindPoolSet<pmem_log_root>(poolset, "");
     pool_id_to_region_[pool_id] = i;
     log_pool_id_[i] = pool_id;
-    pmem::obj::pool<pmem_log_root> pool = pmem_.pool<pmem_log_root>(pool_id);
+    pmem::obj::pool<pmem_log_root> pool =
+        allocator_.pool<pmem_log_root>(pool_id);
 
     for (int j = 0; j < kNumShards; ++j) {
-      log_[i][j] = new PmemLog(pool_id, j, pmem_);
+      log_[i][j] = new PmemLog(pool_id, j, allocator_);
     }
   }
 }
@@ -128,7 +131,7 @@ PmemLog* PmemRegion::GetL1PmemLog(const int region, const int shard) {
 
 int PmemRegion::InitPath(std::string path) {
   fs::remove_all(path);
-  int root_pool_id = pmem_.BindPool<pmem_db>(path, "", 64 * 1024 * 1024);
+  int root_pool_id = allocator_.BindPool<pmem_db>(path, "", 64 * 1024 * 1024);
   if (root_pool_id != 0) {
     std::cerr << "root_pool_id of: '" << path
               << "' must be zero (current: " << root_pool_id << ")\n";
@@ -143,7 +146,7 @@ void PmemRegion::Clear() {
       delete log_[j][i];
     }
   }
-  pmem_.Clear();
+  allocator_.Clear();
 }
 
 #endif  // LISTDB_PMEM_PMEM_REGION_H_
