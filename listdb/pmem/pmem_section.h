@@ -5,6 +5,9 @@
 #include "listdb/lsm/level_list.h"
 #include "listdb/pmem/pmem_dir.h"
 #include "listdb/pmem/pmem_region.h"
+#include "listdb/tasks/Task.h"
+
+namespace fs = std::experimental::filesystem::v1;
 
 /*
  * Interface for managing a section of the NVM.
@@ -12,19 +15,26 @@
  */
 class PmemSection {
  public:
-  PmemSection();
+  PmemSection(int sect_id);
 
-  void Init();
+  void Init(LevelList** ll);
 
   void Open();
 
   void Clear();
 
+  PmemLog* hot_log(const int region, const int shard);
+
+  PmemLog* cold_log(const int region, const int shard);
+
+  PmemAllocator* hot_allocator() { return hot_region_.allocator(); };
+
+  PmemAllocator* cold_allocator() { return cold_region_.allocator(); };
+
  private:
+  int sect_id_;
   PmemRegion hot_region_;
   PmemRegion cold_region_;
-
-  LevelList* ll_[kNumShards];
 
   std::deque<Task*> work_request_queue_;
   std::deque<Task*> work_completion_queue_;
@@ -38,7 +48,7 @@ class PmemSection {
   CompactionWorkerData worker_data_[kNumWorkers];
   std::thread worker_threads_[kNumWorkers];
 
-  void InitTableLists();
+  void InitTableLists(LevelList** ll);
 
   void StartThreads();
 
@@ -47,18 +57,22 @@ class PmemSection {
   void CompactionWorkerThreadLoop(CompactionWorkerData* td);
 };
 
-PmemSection::PmemSection()
-    : hot_region_{PmemRegion(PmemDir::kHotSuffix)},
-      cold_region_{PmemRegion(PmemDir::kColdSuffix)} {}
+PmemSection::PmemSection(int sect_id)
+    : sect_id_{sect_id},
+      hot_region_{PmemRegion(sect_id, PmemDir::kHotSuffix)},
+      cold_region_{PmemRegion(sect_id, PmemDir::kColdSuffix)} {}
 
-void PmemSection::Init() {
+void PmemSection::Init(LevelList** ll) {
+  std::string section_path = PmemDir::section_path(sect_id_);
+  fs::remove_all(section_path);
+  fs::create_directories(section_path);
   hot_region_.CreateRootPool();
   cold_region_.CreateRootPool();
   hot_region_.CreateLogPool();
   cold_region_.CreateLogPool();
   hot_region_.InitSkiplistPool();
   cold_region_.InitSkiplistPool();
-  InitTableLists();
+  InitTableLists(ll);
   StartThreads();
 }
 
@@ -67,9 +81,9 @@ void PmemSection::Open() {
   cold_region_.InitRootPool();
 }
 
-void PmemSection::InitTableLists() {
+void PmemSection::InitTableLists(LevelList** ll) {
   for (int i = 0; i < kNumShards; ++i) {
-    ll_[i] = new LevelList();
+    ll[i] = new LevelList();
     {
       auto tl = new MemTableList(kMemTableCapacity / kNumShards, i);
       tl->BindEnqueueFunction([&, tl, i](MemTable* mem) {
@@ -88,7 +102,7 @@ void PmemSection::InitTableLists() {
         // Bind table list to hot region first
         tl->BindArena(j, hot_region_.GetL0PmemLog(j, i));
       }
-      ll_[i]->SetTableList(0, tl);
+      ll[i]->SetTableList(0, tl);
     }
 
     {
@@ -99,7 +113,7 @@ void PmemSection::InitTableLists() {
         PmemLog* l1_pmem_log = hot_region_.GetL1PmemLog(j, i);
         tl->BindArena(l1_pmem_log->pool_id(), l1_pmem_log);
       }
-      ll_[i]->SetTableList(1, tl);
+      ll[i]->SetTableList(1, tl);
     }
   }
 }
@@ -139,6 +153,14 @@ void PmemSection::Clear() {
 
   hot_region_.Clear();
   cold_region_.Clear();
+}
+
+PmemLog* PmemSection::hot_log(const int region, const int shard) {
+  return hot_region_.log(region, shard);
+}
+
+PmemLog* PmemSection::cold_log(const int region, const int shard) {
+  return cold_region_.log(region, shard);
 }
 
 #endif  // LISTDB_PMEM_PMEM_MGR_H_

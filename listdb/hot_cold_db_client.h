@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "listdb/common.h"
-#include "listdb/listdb.h"
+#include "listdb/hot_cold_listdb.h"
 #include "listdb/util.h"
 #include "listdb/util/random.h"
 
@@ -13,10 +13,27 @@
 
 class HotColdDBClient {
  public:
-  using MemNode = ListDB::MemNode;
-  using PmemNode = ListDB::PmemNode;
+  using MemNode = HotColdListDB::MemNode;
+  using PmemNode = HotColdListDB::PmemNode;
 
-  HotColdDBClient(ListDB *db, int id, int region);
+  HotColdDBClient(int region);
+
+  ~HotColdDBClient();
+
+  void Put(const Key& key, const Value& value);
+
+ private:
+  HotColdListDB* db_;
 };
+
+HotColdDBClient::HotColdDBClient(int region) : db_{new HotColdListDB(region)} {
+  db_->Init();
+}
+
+HotColdDBClient::~HotColdDBClient() { delete db_; }
+
+void HotColdDBClient::Put(const Key& key, const Value& value) {
+  db_->Put(key, value);
+}
 
 #endif  // HOT_COLD_LISTDB_DB_CLIENT_H_

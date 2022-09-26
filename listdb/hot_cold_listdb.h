@@ -31,6 +31,7 @@
 #include "listdb/lsm/pmemtable_list.h"
 #include "listdb/pmem/pmem_dir.h"
 #include "listdb/pmem/pmem_section.h"
+#include "listdb/separator/separator.h"
 #include "listdb/util/clock.h"
 #include "listdb/util/random.h"
 #include "listdb/util/reporter.h"
@@ -65,37 +66,155 @@ class HotColdListDB {
   using PmemDbPool = pmem::obj::pool<pmem_db>;
   using PmemDbPtr = pmem::obj::persistent_ptr<pmem_db>;
 
-  HotColdListDB();
+  using HotColdLog = std::unordered_map<
+      int, std::unordered_map<Temperature, PmemLog* [kNumShards]>>;
+  using Allocators =
+      std::unordered_map<int, std::unordered_map<Temperature, PmemAllocator*>>;
+
+  HotColdListDB(int region);
   ~HotColdListDB();
 
   void Init();
 
   void Open();
 
+  void Put(const Key& key, const Value& value);
+
   void Close();
 
  private:
-  PmemSection pmem0_;
-  PmemSection pmem1_;
+  int DramRandomHeight();
+
+  int PmemRandomHeight();
+
+  static int KeyShard(const Key& key);
+
+  MemTable* GetWritableMemTable(size_t kv_size, int shard,
+                                PmemAllocator* allocator);
+
+  MemTable* GetMemTable(int shard);
+
+  std::array<PmemSection, kNumSections> pmems_;
+  int region_;
+  int sect_id_;
+  Random rnd_;
+  Separator* separator_;
+  Allocators allocators_;
+  HotColdLog log_;
+  LevelList* ll_[kNumShards];
 };
 
-HotColdListDB::HotColdListDB() : pmem0_{PmemSection()}, pmem1_{PmemSection()} {}
+HotColdListDB::HotColdListDB(int region)
+    : pmems_{{PmemSection(0), PmemSection(1)}},
+      region_{region},
+      sect_id_{0},
+      rnd_{Random(0)},
+      separator_{new MockSeparator()} {}
 
 HotColdListDB::~HotColdListDB() {
+  delete separator_;
   fprintf(stdout, "HotColdListDB closed\n");
   Close();
 }
 
 void HotColdListDB::Init() {
-  pmem0_.Init();
-  pmem1_.Init();
+  for (auto& pmem : pmems_) {
+    pmem.Init(ll_);
+  }
+  for (int i = 0; i < kNumShards; ++i) {
+    for (int j = 0; j < kNumSections; ++j) {
+      log_[j][Temperature::kCold][i] = pmems_[j].cold_log(region_, i);
+      log_[j][Temperature::kHot][i] = pmems_[j].hot_log(region_, i);
+      allocators_[j][Temperature::kHot] = pmems_[j].hot_allocator();
+      allocators_[j][Temperature::kCold] = pmems_[j].cold_allocator();
+    }
+  }
 }
 
 void HotColdListDB::Open() {}
 
 void HotColdListDB::Close() {
-  pmem0_.Clear();
-  pmem1_.Clear();
+  for (auto& pmem : pmems_) {
+    pmem.Clear();
+  }
+}
+
+void HotColdListDB::Put(const Key& key, const Value& value) {
+  Temperature temp = separator_->separate(key);
+  PmemAllocator* allocator = allocators_[sect_id_][temp];
+  int shard = KeyShard(key);
+  uint64_t pmem_height = PmemRandomHeight();
+  size_t iul_entry_size =
+      sizeof(PmemNode) + (pmem_height - 1) * sizeof(uint64_t);
+  size_t kv_size = key.size() + sizeof(Value);
+
+  // Determine l0 id
+  MemTable* mem = GetWritableMemTable(kv_size, shard, allocator);
+  uint64_t l0_id = mem->l0_id();
+
+  // Write log
+  PmemPtr log_paddr = log_[sect_id_][temp][shard]->Allocate(iul_entry_size);
+  PmemNode* iul_entry = static_cast<PmemNode*>(log_paddr.get(allocator));
+
+  // clwb things
+  iul_entry->tag = (l0_id << 32) | pmem_height;
+  iul_entry->value = value;
+  clwb(&iul_entry->tag, 16);
+  _mm_sfence();
+  iul_entry->key = key;
+  clwb(iul_entry, 8);
+
+  // Create skiplist node
+  uint64_t dram_height = DramRandomHeight();
+  MemNode* node = static_cast<MemNode*>(
+      malloc(sizeof(MemNode) + (dram_height - 1) * sizeof(uint64_t)));
+  node->key = key;
+  node->tag = (l0_id << 32) | dram_height;
+  node->value = value;
+  memset(static_cast<void*>(&node->next[0]), 0, dram_height * sizeof(uint64_t));
+
+  lockfree_skiplist* skiplist = mem->skiplist();
+  skiplist->Insert(node);
+  mem->w_UnRef();
+}
+
+inline int HotColdListDB::DramRandomHeight() {
+  static const unsigned int kBranching = 4;
+  int height = 1;
+  while (height < kMaxHeight && ((rnd_.Next() % kBranching) == 0)) {
+    height++;
+  }
+  return height;
+}
+
+inline int HotColdListDB::PmemRandomHeight() {
+  static const unsigned int kBranching = 4;
+  int height = 1;
+  if (rnd_.Next() % std::max<int>(1, (kBranching / kNumRegions)) == 0) {
+    height++;
+    while (height < kMaxHeight && ((rnd_.Next() % kBranching) == 0)) {
+      height++;
+    }
+  }
+  return height;
+}
+
+inline int HotColdListDB::KeyShard(const Key& key) {
+  return key.key_num() % kNumShards;
+}
+
+// Any table this function returns must be unreferenced manually
+inline MemTable* HotColdListDB::GetWritableMemTable(size_t kv_size, int shard,
+                                                    PmemAllocator* allocator) {
+  TableList* tl = ll_[shard]->GetTableList(0);
+  Table* mem = tl->GetMutable(kv_size, allocator);
+  return static_cast<MemTable*>(mem);
+}
+
+inline MemTable* HotColdListDB::GetMemTable(int shard) {
+  TableList* tl = ll_[shard]->GetTableList(0);
+  Table* mem = tl->GetFront();
+  return static_cast<MemTable*>(mem);
 }
 
 #endif  // HOT_COLD_LISTDB_LISTDB_H_

@@ -20,7 +20,7 @@ using PmemDbPtr = pmem::obj::persistent_ptr<pmem_db>;
  */
 class PmemRegion {
  public:
-  PmemRegion(std::string_view suffix);
+  PmemRegion(int sect_id, std::string_view suffix);
 
   PmemDbPool InitRootPool();
 
@@ -34,11 +34,18 @@ class PmemRegion {
 
   PmemLog* GetL1PmemLog(const int region, const int shard);
 
+  PmemLog* log(const int region, const int shard) {
+    return log_[region][shard];
+  }
+
+  PmemAllocator* allocator() { return &allocator_; }
+
   void Clear();
 
  private:
+  int sect_id_;
   std::string_view suffix_;
-  HCPmem pmem_;
+  PmemAllocator allocator_;
 
   std::unordered_map<int, int> pool_id_to_region_;
   std::unordered_map<int, int> log_pool_id_;
@@ -52,7 +59,8 @@ class PmemRegion {
   int InitPath(std::string path);
 };
 
-PmemRegion::PmemRegion(std::string_view suffix) : suffix_{suffix} {}
+PmemRegion::PmemRegion(int sect_id, std::string_view suffix)
+    : sect_id_{sect_id}, suffix_{suffix} {}
 
 void PmemRegion::CreateRootPool() {
   PmemDbPool db_pool = InitRootPool();
@@ -69,26 +77,27 @@ void PmemRegion::CreateRootPool() {
 }
 
 PmemDbPool PmemRegion::InitRootPool() {
-  std::string db_path = PmemDir::db_path(suffix_);
+  std::string db_path = PmemDir::db_path(sect_id_, suffix_);
   int root_pool_id = PmemRegion::InitPath(db_path);
-  return pmem_.pool<pmem_db>(root_pool_id);
+  return allocator_.pool<pmem_db>(root_pool_id);
 }
 
 void PmemRegion::CreateLogPool() {
   for (int i = 0; i < kNumRegions; ++i) {
-    std::string log_path = PmemDir::region_log_path(i, suffix_);
+    std::string log_path = PmemDir::region_log_path(sect_id_, i, suffix_);
     fs::remove_all(log_path);
     fs::create_directories(log_path);
-    std::string poolset = PmemDir::region_log_poolset(i, suffix_);
+    std::string poolset = PmemDir::region_log_poolset(sect_id_, i, suffix_);
     PmemDir::write_poolset_config(log_path, poolset);
 
-    int pool_id = pmem_.BindPoolSet<pmem_log_root>(poolset, "");
+    int pool_id = allocator_.BindPoolSet<pmem_log_root>(poolset, "");
     pool_id_to_region_[pool_id] = i;
     log_pool_id_[i] = pool_id;
-    pmem::obj::pool<pmem_log_root> pool = pmem_.pool<pmem_log_root>(pool_id);
+    pmem::obj::pool<pmem_log_root> pool =
+        allocator_.pool<pmem_log_root>(pool_id);
 
     for (int j = 0; j < kNumShards; ++j) {
-      log_[i][j] = new PmemLog(pool_id, j, pmem_);
+      log_[i][j] = new PmemLog(pool_id, j, allocator_);
     }
   }
 }
@@ -122,7 +131,7 @@ PmemLog* PmemRegion::GetL1PmemLog(const int region, const int shard) {
 
 int PmemRegion::InitPath(std::string path) {
   fs::remove_all(path);
-  int root_pool_id = pmem_.BindPool<pmem_db>(path, "", 64 * 1024 * 1024);
+  int root_pool_id = allocator_.BindPool<pmem_db>(path, "", 64 * 1024 * 1024);
   if (root_pool_id != 0) {
     std::cerr << "root_pool_id of: '" << path
               << "' must be zero (current: " << root_pool_id << ")\n";
@@ -137,7 +146,7 @@ void PmemRegion::Clear() {
       delete log_[j][i];
     }
   }
-  pmem_.Clear();
+  allocator_.Clear();
 }
 
 #endif  // LISTDB_PMEM_PMEM_REGION_H_

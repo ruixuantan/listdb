@@ -81,11 +81,11 @@ void Pmem::Clear() {
  * for binding in NVM, within a vector
  * Methods return index of the objects in the vector.
  */
-class HCPmem {
+class PmemAllocator {
  public:
-  HCPmem() : pool_bases_{} {};
+  PmemAllocator() : pool_bases_{} {};
 
-  ~HCPmem() { Clear(); };
+  ~PmemAllocator() { Clear(); };
 
   template <typename T>
   int BindPool(const std::string& path, const std::string& layout,
