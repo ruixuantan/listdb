@@ -15,7 +15,7 @@ namespace fs = std::experimental::filesystem::v1;
  */
 class PmemSection {
  public:
-  PmemSection(int sect_id);
+  PmemSection();
 
   void Init(LevelList** ll);
 
@@ -32,7 +32,6 @@ class PmemSection {
   PmemAllocator* cold_allocator() { return cold_region_.allocator(); };
 
  private:
-  int sect_id_;
   PmemRegion hot_region_;
   PmemRegion cold_region_;
 
@@ -57,15 +56,11 @@ class PmemSection {
   void CompactionWorkerThreadLoop(CompactionWorkerData* td);
 };
 
-PmemSection::PmemSection(int sect_id)
-    : sect_id_{sect_id},
-      hot_region_{PmemRegion(sect_id, PmemDir::kHotSuffix)},
-      cold_region_{PmemRegion(sect_id, PmemDir::kColdSuffix)} {}
+PmemSection::PmemSection()
+    : hot_region_{PmemRegion(PmemDir::kHotSuffix)},
+      cold_region_{PmemRegion(PmemDir::kColdSuffix)} {}
 
 void PmemSection::Init(LevelList** ll) {
-  std::string section_path = PmemDir::section_path(sect_id_);
-  fs::remove_all(section_path);
-  fs::create_directories(section_path);
   hot_region_.CreateRootPool();
   cold_region_.CreateRootPool();
   hot_region_.CreateLogPool();
