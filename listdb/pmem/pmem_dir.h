@@ -12,29 +12,20 @@ namespace PmemDir {
 constexpr std::string_view kHotSuffix = "_hot";
 constexpr std::string_view kColdSuffix = "_cold";
 
-std::string db_path(int sect_id, std::string_view suffix) {
+std::string db_path(std::string_view suffix) {
   std::stringstream pss;
-  pss << kPathPrefix << sect_id << "/listdb" << suffix;
+  pss << kPathPrefix << "listdb" << suffix;
   return pss.str();
 };
 
-std::string section_path(int sect_id) {
+std::string region_log_path(int region_number, std::string_view suffix) {
   std::stringstream pss;
-  pss << kPathPrefix << sect_id;
-  return pss.str();
-}
-
-std::string region_log_path(int sect_id, int region_number,
-                            std::string_view suffix) {
-  std::stringstream pss;
-  pss << kPathPrefix << sect_id << "/" << region_number << suffix
-      << "/listdb_log";
+  pss << kPathPrefix << region_number << suffix << "/listdb_log";
   return pss.str();
 };
 
-std::string region_log_poolset(int sect_id, int region_number,
-                               std::string_view suffix) {
-  return region_log_path(sect_id, region_number, suffix) + ".set";
+std::string region_log_poolset(int region_number, std::string_view suffix) {
+  return region_log_path(region_number, suffix) + ".set";
 };
 
 void write_poolset_config(const std::string path, const std::string poolset) {

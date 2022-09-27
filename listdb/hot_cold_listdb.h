@@ -66,10 +66,8 @@ class HotColdListDB {
   using PmemDbPool = pmem::obj::pool<pmem_db>;
   using PmemDbPtr = pmem::obj::persistent_ptr<pmem_db>;
 
-  using HotColdLog = std::unordered_map<
-      int, std::unordered_map<Temperature, PmemLog* [kNumShards]>>;
-  using Allocators =
-      std::unordered_map<int, std::unordered_map<Temperature, PmemAllocator*>>;
+  using HotColdLog = std::unordered_map<Temperature, PmemLog* [kNumShards]>;
+  using Allocators = std::unordered_map<Temperature, PmemAllocator*>;
 
   HotColdListDB(int region);
   ~HotColdListDB();
@@ -94,9 +92,8 @@ class HotColdListDB {
 
   MemTable* GetMemTable(int shard);
 
-  std::array<PmemSection, kNumSections> pmems_;
+  PmemSection pmem_;
   int region_;
-  int sect_id_;
   Random rnd_;
   Separator* separator_;
   Allocators allocators_;
@@ -105,9 +102,8 @@ class HotColdListDB {
 };
 
 HotColdListDB::HotColdListDB(int region)
-    : pmems_{{PmemSection(0), PmemSection(1)}},
+    : pmem_{PmemSection()},
       region_{region},
-      sect_id_{0},
       rnd_{Random(0)},
       separator_{new MockSeparator()} {}
 
@@ -118,30 +114,22 @@ HotColdListDB::~HotColdListDB() {
 }
 
 void HotColdListDB::Init() {
-  for (auto& pmem : pmems_) {
-    pmem.Init(ll_);
-  }
+  pmem_.Init(ll_);
   for (int i = 0; i < kNumShards; ++i) {
-    for (int j = 0; j < kNumSections; ++j) {
-      log_[j][Temperature::kCold][i] = pmems_[j].cold_log(region_, i);
-      log_[j][Temperature::kHot][i] = pmems_[j].hot_log(region_, i);
-      allocators_[j][Temperature::kHot] = pmems_[j].hot_allocator();
-      allocators_[j][Temperature::kCold] = pmems_[j].cold_allocator();
-    }
+    log_[Temperature::kCold][i] = pmem_.cold_log(region_, i);
+    log_[Temperature::kHot][i] = pmem_.hot_log(region_, i);
+    allocators_[Temperature::kHot] = pmem_.hot_allocator();
+    allocators_[Temperature::kCold] = pmem_.cold_allocator();
   }
 }
 
 void HotColdListDB::Open() {}
 
-void HotColdListDB::Close() {
-  for (auto& pmem : pmems_) {
-    pmem.Clear();
-  }
-}
+void HotColdListDB::Close() { pmem_.Clear(); }
 
 void HotColdListDB::Put(const Key& key, const Value& value) {
   Temperature temp = separator_->separate(key);
-  PmemAllocator* allocator = allocators_[sect_id_][temp];
+  PmemAllocator* allocator = allocators_[temp];
   int shard = KeyShard(key);
   uint64_t pmem_height = PmemRandomHeight();
   size_t iul_entry_size =
@@ -153,7 +141,7 @@ void HotColdListDB::Put(const Key& key, const Value& value) {
   uint64_t l0_id = mem->l0_id();
 
   // Write log
-  PmemPtr log_paddr = log_[sect_id_][temp][shard]->Allocate(iul_entry_size);
+  PmemPtr log_paddr = log_[temp][shard]->Allocate(iul_entry_size);
   PmemNode* iul_entry = static_cast<PmemNode*>(log_paddr.get(allocator));
 
   // clwb things
